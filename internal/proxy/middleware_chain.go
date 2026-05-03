@@ -18,10 +18,10 @@ import (
 type contextKey string
 
 const (
-	ctxKeyRequestID  contextKey = "request_id"
-	ctxKeyTraceID    contextKey = "trace_id"
-	ctxKeyTarget     contextKey = "target"
-	ctxKeyRule       contextKey = "rule"
+	ctxKeyRequestID     contextKey = "request_id"
+	ctxKeyTraceID       contextKey = "trace_id"
+	ctxKeyTarget        contextKey = "target"
+	ctxKeyRule          contextKey = "rule"
 	ctxKeyRemainingPath contextKey = "remaining_path"
 	ctxKeyTargetProxy   contextKey = "target_proxy"
 )

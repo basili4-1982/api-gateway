@@ -69,18 +69,18 @@ const (
 
 // MultiProxy основной прокси сервер с поддержкой множественных таргетов
 type MultiProxy struct {
-	config       atomic.Pointer[config.Config]
-	targets      map[string]*TargetProxy
-	routeConfigs []RouteConfig
-	routeByRule  map[*config.RoutingRule]*RouteConfig
-	jwtValidator *jwtutil.JWTValidator
-	logger       *zap.Logger
-	metrics      *Metrics
-	mu           sync.RWMutex
-	httpServer   *http.Server
-	httpsServer  *http.Server
-	globalLimiter *rate.Limiter
-	handler       http.Handler
+	config         atomic.Pointer[config.Config]
+	targets        map[string]*TargetProxy
+	routeConfigs   []RouteConfig
+	routeByRule    map[*config.RoutingRule]*RouteConfig
+	jwtValidator   *jwtutil.JWTValidator
+	logger         *zap.Logger
+	metrics        *Metrics
+	mu             sync.RWMutex
+	httpServer     *http.Server
+	httpsServer    *http.Server
+	globalLimiter  *rate.Limiter
+	handler        http.Handler
 	tracerProvider *TracerProvider
 }
 
@@ -463,7 +463,9 @@ func (mp *MultiProxy) logAccess(reqID, traceID string, r *http.Request, statusCo
 		zap.String("remote_addr", r.RemoteAddr),
 		zap.String("user_agent", r.UserAgent()),
 		zap.String("target", func() string {
-			if target != nil { return target.Name }
+			if target != nil {
+				return target.Name
+			}
 			return "-"
 		}()),
 	)
