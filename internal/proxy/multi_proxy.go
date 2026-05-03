@@ -149,7 +149,10 @@ func NewMultiProxy(cfg *config.Config, logger *zap.Logger) (*MultiProxy, error) 
 	handler = requestIDMiddleware()(handler)
 	handler = recoveryMiddleware(logger)(handler)
 	if cfg.BasicAuth.Enabled {
-		handler = basicAuthMiddleware(cfg.BasicAuth.Username, cfg.BasicAuth.PasswordHash)(handler)
+		logger.Info("Basic Auth enabled",
+			zap.String("username", cfg.BasicAuth.Username),
+		)
+		handler = basicAuthMiddleware(cfg.BasicAuth.Username, cfg.BasicAuth.Password)(handler)
 	}
 	mp.handler = handler
 
@@ -242,25 +245,24 @@ func (mp *MultiProxy) modifyRequest(r *http.Request, targetCfg *config.TargetCon
 	}
 
 	if authHeader != "" {
-		claims, err := mp.jwtValidator.ParseAndValidate(authHeader)
-		if err != nil {
-			return fmt.Errorf("invalid token: %w", err)
-		}
-
-		if err := mp.jwtValidator.ValidateClaims(claims); err != nil {
-			return fmt.Errorf("invalid token claims: %w", err)
-		}
-
-		if rule != nil && rule.Auth != nil && len(rule.Auth.Roles) > 0 {
-			if err := mp.checkRoles(claims, rule.Auth.Roles); err != nil {
-				return err
+		if rule != nil && rule.Auth != nil && rule.Auth.Required {
+			claims, err := mp.jwtValidator.ParseAndValidate(authHeader)
+			if err != nil {
+				return fmt.Errorf("invalid token: %w", err)
 			}
-		}
-
-		extracted := jwtutil.ExtractClaims(claims, mp.config.Load().JWT.ClaimMappings)
-		for claimName, headerName := range mp.config.Load().Headers.ClaimToHeader {
-			if val, ok := extracted[claimName]; ok {
-				r.Header.Set(headerName, fmt.Sprintf("%v", val))
+			if err := mp.jwtValidator.ValidateClaims(claims); err != nil {
+				return fmt.Errorf("invalid token claims: %w", err)
+			}
+			if len(rule.Auth.Roles) > 0 {
+				if err := mp.checkRoles(claims, rule.Auth.Roles); err != nil {
+					return err
+				}
+			}
+			extracted := jwtutil.ExtractClaims(claims, mp.config.Load().JWT.ClaimMappings)
+			for claimName, headerName := range mp.config.Load().Headers.ClaimToHeader {
+				if val, ok := extracted[claimName]; ok {
+					r.Header.Set(headerName, fmt.Sprintf("%v", val))
+				}
 			}
 		}
 	}
