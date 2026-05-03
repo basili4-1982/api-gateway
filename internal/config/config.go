@@ -11,15 +11,16 @@ import (
 
 // Config представляет основную структуру конфигурации
 type Config struct {
-	App     `yaml:"application"`
-	Server  ServerConfig   `yaml:"server"`
-	TLS     *TLSConfig     `yaml:"tls,omitempty"`
-	Static  *StaticConfig  `yaml:"static,omitempty"`
-	Targets []TargetConfig `yaml:"targets"`
-	JWT     JWTConfig      `yaml:"jwt"`
-	Logging LoggingConfig  `yaml:"logging"`
-	Headers HeadersConfig  `yaml:"headers"`
-	Routing RoutingConfig  `yaml:"routing"`
+	App       `yaml:"application"`
+	Server    ServerConfig   `yaml:"server"`
+	TLS       *TLSConfig     `yaml:"tls,omitempty"`
+	Static    *StaticConfig  `yaml:"static,omitempty"`
+	Targets   []TargetConfig `yaml:"targets"`
+	JWT       JWTConfig      `yaml:"jwt"`
+	BasicAuth BasicAuthConfig `yaml:"basic_auth"`
+	Logging   LoggingConfig  `yaml:"logging"`
+	Headers   HeadersConfig  `yaml:"headers"`
+	Routing   RoutingConfig  `yaml:"routing"`
 }
 
 // TLSConfig конфигурация TLS с автосертификатами (Let's Encrypt)
@@ -93,6 +94,13 @@ type AuthRule struct {
 	Required   bool     `yaml:"required"`              // требовать ли JWT
 	Roles      []string `yaml:"roles,omitempty"`       // требуемые роли (опционально)
 	StripToken *bool    `yaml:"strip_token,omitempty"` // удалять токен (наследует глобальный если не указан)
+}
+
+// BasicAuthConfig конфигурация Basic аутентификации
+type BasicAuthConfig struct {
+	Enabled      bool   `yaml:"enabled"`
+	Username     string `yaml:"username"`
+	PasswordHash string `yaml:"password_hash"`
 }
 
 // RateLimitRule конфигурация rate limiting для роута
