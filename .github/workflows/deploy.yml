@@ -28,6 +28,8 @@ jobs:
           port: ${{ secrets.DEPLOY_PORT }}
           script: |
             cd /opt/new-cml
+            export IMAGE_TAG=${{ github.event.inputs.tag || 'latest' }}
+            sed -i "s|image: ghcr.io/basili4-1982/api-gateway:.*|image: ghcr.io/basili4-1982/api-gateway:${IMAGE_TAG}|" docker-compose.prod.yml
             docker compose pull api-gateway
             docker compose up -d --force-recreate api-gateway
-            docker image prune -f
+            docker image prune -f || true
