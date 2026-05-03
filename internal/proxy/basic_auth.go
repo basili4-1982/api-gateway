@@ -6,21 +6,26 @@ import (
 	"encoding/hex"
 	"net/http"
 	"strings"
+
+	"github.com/basili4-1982/api-gateway/internal/config"
 )
 
-func basicAuthMiddleware(expectedUser, expectedPass string) Middleware {
-	expectedUserHash := sha256Hex(expectedUser)
-	expectedPassHash := sha256Hex(expectedPass)
+func basicAuthMiddleware(cfg config.BasicAuthConfig) Middleware {
+	expectedUserHash := sha256Hex(cfg.Username)
+	expectedPassHash := sha256Hex(cfg.Password)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/health" || r.URL.Path == "/ready" || strings.HasPrefix(r.URL.Path, "/api") {
-				next.ServeHTTP(w, r)
-				return
+			for _, skipPath := range cfg.SkipPaths {
+				if r.URL.Path == skipPath || strings.HasPrefix(r.URL.Path, skipPath+"/") {
+					next.ServeHTTP(w, r)
+					return
+				}
 			}
 
 			u, p, ok := r.BasicAuth()
 			if !ok {
+				w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -30,6 +35,7 @@ func basicAuthMiddleware(expectedUser, expectedPass string) Middleware {
 
 			if subtle.ConstantTimeCompare([]byte(uHash), []byte(expectedUserHash)) != 1 ||
 				subtle.ConstantTimeCompare([]byte(pHash), []byte(expectedPassHash)) != 1 {
+				w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
