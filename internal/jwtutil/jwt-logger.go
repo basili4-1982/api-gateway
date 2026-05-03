@@ -16,6 +16,7 @@ func NewJWTValidatorWithLogger(
 	secretKey, algorithm string,
 	validateExp, validateIss bool, expectedIss string,
 	validateAud bool, expectedAud string,
+	publicKeyFile string,
 	logger *zap.Logger,
 ) (*JWTValidatorWithLogger, error) {
 
@@ -23,6 +24,7 @@ func NewJWTValidatorWithLogger(
 		secretKey, algorithm,
 		validateExp, validateIss, expectedIss,
 		validateAud, expectedAud,
+		publicKeyFile,
 	)
 	if err != nil {
 		return nil, err

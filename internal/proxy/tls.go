@@ -9,7 +9,7 @@ import (
 )
 
 func (mp *MultiProxy) startTLS() error {
-	tls := mp.config.TLS
+	tls := mp.config.Load().TLS
 
 	certManager := &autocert.Manager{
 		Prompt:     autocert.AcceptTOS,
@@ -21,9 +21,9 @@ func (mp *MultiProxy) startTLS() error {
 	tlsServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", tls.Port),
 		Handler:      mp,
-		ReadTimeout:  mp.config.Server.ReadTimeout,
-		WriteTimeout: mp.config.Server.WriteTimeout,
-		IdleTimeout:  mp.config.Server.IdleTimeout,
+		ReadTimeout:  mp.config.Load().Server.ReadTimeout,
+		WriteTimeout: mp.config.Load().Server.WriteTimeout,
+		IdleTimeout:  mp.config.Load().Server.IdleTimeout,
 		TLSConfig:    certManager.TLSConfig(),
 	}
 	mp.httpsServer = tlsServer
@@ -32,8 +32,8 @@ func (mp *MultiProxy) startTLS() error {
 	httpServer := &http.Server{
 		Addr:        fmt.Sprintf(":%d", tls.HTTPPort),
 		Handler:     httpHandler,
-		ReadTimeout: mp.config.Server.ReadTimeout,
-		IdleTimeout: mp.config.Server.IdleTimeout,
+		ReadTimeout: mp.config.Load().Server.ReadTimeout,
+		IdleTimeout: mp.config.Load().Server.IdleTimeout,
 	}
 	mp.httpServer = httpServer
 

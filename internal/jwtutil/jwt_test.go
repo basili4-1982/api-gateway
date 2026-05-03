@@ -9,7 +9,7 @@ import (
 
 func newTestValidator(t *testing.T) *JWTValidator {
 	t.Helper()
-	v, err := NewJWTValidator("test-secret", "HS256", true, false, "", false, "")
+	v, err := NewJWTValidator("test-secret", "HS256", true, false, "", false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestExtractClaims(t *testing.T) {
 }
 
 func TestValidateClaims_Issuer(t *testing.T) {
-	v, err := NewJWTValidator("secret", "HS256", false, true, "myapp", false, "")
+	v, err := NewJWTValidator("secret", "HS256", false, true, "myapp", false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestValidateClaims_Issuer(t *testing.T) {
 }
 
 func TestValidateClaims_WrongIssuer(t *testing.T) {
-	v, err := NewJWTValidator("secret", "HS256", false, true, "myapp", false, "")
+	v, err := NewJWTValidator("secret", "HS256", false, true, "myapp", false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestValidateClaims_WrongIssuer(t *testing.T) {
 }
 
 func TestWithoutExpValidation(t *testing.T) {
-	v, err := NewJWTValidator("secret", "HS256", false, false, "", false, "")
+	v, err := NewJWTValidator("secret", "HS256", false, false, "", false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

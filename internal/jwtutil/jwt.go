@@ -1,8 +1,14 @@
 package jwtutil
 
 import (
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -16,37 +22,75 @@ var (
 
 // JWTValidator валидатор JWT токенов
 type JWTValidator struct {
-	secretKey   []byte
-	algorithm   string
-	validateExp bool
-	validateIss bool
-	expectedIss string
-	validateAud bool
-	expectedAud string
+	secretKey    []byte
+	publicKey    interface{}
+	algorithm    string
+	validateExp  bool
+	validateIss  bool
+	expectedIss  string
+	validateAud  bool
+	expectedAud  string
 }
 
 // NewJWTValidator создает новый валидатор JWT
 func NewJWTValidator(secretKey, algorithm string,
 	validateExp, validateIss bool, expectedIss string,
-	validateAud bool, expectedAud string) (*JWTValidator, error) {
+	validateAud bool, expectedAud string,
+	publicKeyFile string,
+) (*JWTValidator, error) {
 
 	v := &JWTValidator{
-		algorithm:   algorithm,
-		validateExp: validateExp,
-		validateIss: validateIss,
-		expectedIss: expectedIss,
-		validateAud: validateAud,
-		expectedAud: expectedAud,
+		algorithm:    algorithm,
+		validateExp:  validateExp,
+		validateIss:  validateIss,
+		expectedIss:  expectedIss,
+		validateAud:  validateAud,
+		expectedAud:  expectedAud,
 	}
 
-	// Определяем тип ключа на основе алгоритма
-	if strings.HasPrefix(algorithm, "HS") {
-		// HMAC - симметричный ключ
+	prefix := strings.ToUpper(algorithm[:2])
+
+	switch {
+	case prefix == "HS" || algorithm == "HS256" || algorithm == "HS384" || algorithm == "HS512":
 		if secretKey == "" {
 			return nil, fmt.Errorf("secret key required for HMAC algorithm")
 		}
 		v.secretKey = []byte(secretKey)
-	} else {
+
+	case prefix == "RS" || algorithm == "RS256" || algorithm == "RS384" || algorithm == "RS512":
+		key, err := loadPublicKey(publicKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load RSA public key: %w", err)
+		}
+		rsaKey, ok := key.(*rsa.PublicKey)
+		if !ok {
+			return nil, fmt.Errorf("key file is not an RSA public key")
+		}
+		v.publicKey = rsaKey
+
+	case prefix == "ES" || algorithm == "ES256" || algorithm == "ES384" || algorithm == "ES512":
+		key, err := loadPublicKey(publicKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load ECDSA public key: %w", err)
+		}
+		ecKey, ok := key.(*ecdsa.PublicKey)
+		if !ok {
+			return nil, fmt.Errorf("key file is not an ECDSA public key")
+		}
+		v.publicKey = ecKey
+
+	case algorithm == "EdDSA" || algorithm == "ED25519":
+		key, err := loadPublicKey(publicKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load Ed25519 public key: %w", err)
+		}
+		edKey, ok := key.(ed25519.PublicKey)
+		if !ok {
+			return nil, fmt.Errorf("key file is not an Ed25519 public key")
+		}
+		v.publicKey = edKey
+
+	default:
 		return nil, fmt.Errorf("unsupported algorithm: %s", algorithm)
 	}
 
@@ -59,10 +103,8 @@ func (v *JWTValidator) ParseAndValidate(tokenString string) (jwt.MapClaims, erro
 		return nil, ErrNoToken
 	}
 
-	// Убираем префикс "Bearer " если есть
 	tokenString = strings.TrimPrefix(tokenString, "Bearer ")
 
-	// Парсим токен
 	token, err := jwt.Parse(tokenString, v.keyFunc, v.withValidOptions()...)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidToken, err)
@@ -80,21 +122,6 @@ func (v *JWTValidator) ParseAndValidate(tokenString string) (jwt.MapClaims, erro
 	return claims, nil
 }
 
-// keyFunc возвращает ключ для проверки подписи
-func (v *JWTValidator) keyFunc(token *jwt.Token) (interface{}, error) {
-	// Проверяем алгоритм
-	if token.Method.Alg() != v.algorithm {
-		return nil, fmt.Errorf("%w: expected %s, got %s",
-			ErrInvalidAlgorithm, v.algorithm, token.Method.Alg())
-	}
-
-	// Возвращаем соответствующий ключ
-	if v.secretKey != nil {
-		return v.secretKey, nil
-	}
-	return nil, fmt.Errorf("no key available")
-}
-
 // withValidOptions возвращает опции валидации
 func (v *JWTValidator) withValidOptions() []jwt.ParserOption {
 	var opts []jwt.ParserOption
@@ -103,7 +130,20 @@ func (v *JWTValidator) withValidOptions() []jwt.ParserOption {
 		opts = append(opts, jwt.WithoutClaimsValidation())
 	}
 
+	opts = append(opts, jwt.WithValidMethods([]string{v.algorithm}))
+
 	return opts
+}
+
+// keyFunc возвращает ключ для проверки подписи
+func (v *JWTValidator) keyFunc(token *jwt.Token) (interface{}, error) {
+	switch {
+	case v.secretKey != nil:
+		return v.secretKey, nil
+	case v.publicKey != nil:
+		return v.publicKey, nil
+	}
+	return nil, fmt.Errorf("no key available")
 }
 
 // ValidateClaims выполняет дополнительную валидацию claims
@@ -121,14 +161,18 @@ func (v *JWTValidator) ValidateClaims(claims jwt.MapClaims) error {
 
 	// Проверка audience
 	if v.validateAud {
-		aud, ok := claims["aud"].(string)
-		if !ok {
-			// Может быть массивом строк
-			if audSlice, claimsOk := claims["aud"].([]interface{}); claimsOk && len(audSlice) > 0 {
-				aud, ok = audSlice[0].(string)
+		audMatch := false
+		if audStr, ok := claims["aud"].(string); ok {
+			audMatch = audStr == v.expectedAud
+		} else if audSlice, ok := claims["aud"].([]interface{}); ok {
+			for _, a := range audSlice {
+				if s, ok := a.(string); ok && s == v.expectedAud {
+					audMatch = true
+					break
+				}
 			}
 		}
-		if !ok || aud != v.expectedAud {
+		if !audMatch {
 			return fmt.Errorf("invalid audience")
 		}
 	}
@@ -147,4 +191,32 @@ func ExtractClaims(claims jwt.MapClaims, mappings []string) map[string]interface
 	}
 
 	return result
+}
+
+// loadPublicKey загружает публичный ключ из PEM файла
+func loadPublicKey(path string) (interface{}, error) {
+	pemData, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read key file: %w", err)
+	}
+
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return nil, fmt.Errorf("no PEM data found in %s", path)
+	}
+
+	switch block.Type {
+	case "PUBLIC KEY":
+		return x509.ParsePKIXPublicKey(block.Bytes)
+	case "RSA PUBLIC KEY":
+		return x509.ParsePKCS1PublicKey(block.Bytes)
+	case "CERTIFICATE":
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parse certificate: %w", err)
+		}
+		return cert.PublicKey, nil
+	default:
+		return nil, fmt.Errorf("unsupported PEM block type: %s", block.Type)
+	}
 }

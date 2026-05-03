@@ -3,7 +3,9 @@ package proxy
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"net/http"
+	"time"
 )
 
 type responseWriter struct {
@@ -33,6 +35,9 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 
 func generateRequestID() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	_, err := rand.Read(b)
+	if err != nil {
+		return fmt.Sprintf("%x", time.Now().UnixNano())
+	}
 	return hex.EncodeToString(b)
 }
