@@ -12,15 +12,15 @@ import (
 // Config представляет основную структуру конфигурации
 type Config struct {
 	App       `yaml:"application"`
-	Server    ServerConfig   `yaml:"server"`
-	TLS       *TLSConfig     `yaml:"tls,omitempty"`
-	Static    *StaticConfig  `yaml:"static,omitempty"`
-	Targets   []TargetConfig `yaml:"targets"`
-	JWT       JWTConfig      `yaml:"jwt"`
+	Server    ServerConfig    `yaml:"server"`
+	TLS       *TLSConfig      `yaml:"tls,omitempty"`
+	Static    *StaticConfig   `yaml:"static,omitempty"`
+	Targets   []TargetConfig  `yaml:"targets"`
+	JWT       JWTConfig       `yaml:"jwt"`
 	BasicAuth BasicAuthConfig `yaml:"basic_auth"`
-	Logging   LoggingConfig  `yaml:"logging"`
-	Headers   HeadersConfig  `yaml:"headers"`
-	Routing   RoutingConfig  `yaml:"routing"`
+	Logging   LoggingConfig   `yaml:"logging"`
+	Headers   HeadersConfig   `yaml:"headers"`
+	Routing   RoutingConfig   `yaml:"routing"`
 }
 
 // TLSConfig конфигурация TLS с автосертификатами (Let's Encrypt)
@@ -49,17 +49,17 @@ type StaticConfig struct {
 }
 type App struct {
 	Env               string   `yaml:"env"`
-	HealthCheck      bool     `yaml:"health_check"`
+	HealthCheck       bool     `yaml:"health_check"`
 	MetricsAllowedIPs []string `yaml:"metrics_allowed_ips"`
 }
 
 // ServerConfig конфигурация HTTP сервера
 type ServerConfig struct {
-	Port              int           `yaml:"port"`
-	ReadTimeout       time.Duration `yaml:"read_timeout"`
-	WriteTimeout      time.Duration `yaml:"write_timeout"`
-	IdleTimeout       time.Duration `yaml:"idle_timeout"`
-	MaxRequestBodySize int64        `yaml:"max_request_body_size"` // макс. размер тела запроса (байт), 0 = без лимита
+	Port               int           `yaml:"port"`
+	ReadTimeout        time.Duration `yaml:"read_timeout"`
+	WriteTimeout       time.Duration `yaml:"write_timeout"`
+	IdleTimeout        time.Duration `yaml:"idle_timeout"`
+	MaxRequestBodySize int64         `yaml:"max_request_body_size"` // макс. размер тела запроса (байт), 0 = без лимита
 }
 
 // TargetConfig конфигурация целевого сервера
