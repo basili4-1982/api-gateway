@@ -34,9 +34,6 @@ COPY --from=builder /etc/proxy /etc/proxy
 # Копируем бинарник
 COPY --from=builder /build/api-gateway /app/api-gateway
 
-# Чистим credentials из builder слоя (безопасность)
-RUN rm -f ~/.netrc && git config --global --unset url.insteadOf 2>/dev/null || true
-
 WORKDIR /app
 
 CMD ["/app/api-gateway"]
