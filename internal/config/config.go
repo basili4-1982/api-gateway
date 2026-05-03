@@ -47,16 +47,18 @@ type StaticConfig struct {
 	Apps []StaticApp `yaml:"apps"`
 }
 type App struct {
-	Env         string `yaml:"env"`
-	HealthCheck bool   `yaml:"health_check"`
+	Env               string   `yaml:"env"`
+	HealthCheck      bool     `yaml:"health_check"`
+	MetricsAllowedIPs []string `yaml:"metrics_allowed_ips"`
 }
 
 // ServerConfig конфигурация HTTP сервера
 type ServerConfig struct {
-	Port         int           `yaml:"port"`
-	ReadTimeout  time.Duration `yaml:"read_timeout"`
-	WriteTimeout time.Duration `yaml:"write_timeout"`
-	IdleTimeout  time.Duration `yaml:"idle_timeout"`
+	Port              int           `yaml:"port"`
+	ReadTimeout       time.Duration `yaml:"read_timeout"`
+	WriteTimeout      time.Duration `yaml:"write_timeout"`
+	IdleTimeout       time.Duration `yaml:"idle_timeout"`
+	MaxRequestBodySize int64        `yaml:"max_request_body_size"` // макс. размер тела запроса (байт), 0 = без лимита
 }
 
 // TargetConfig конфигурация целевого сервера
@@ -72,7 +74,8 @@ type TargetConfig struct {
 
 // RoutingConfig конфигурация маршрутизации
 type RoutingConfig struct {
-	Rules []RoutingRule `yaml:"rules"` // правила маршрутизации
+	Rules       []RoutingRule  `yaml:"rules"`                  // правила маршрутизации
+	GlobalLimit *RateLimitRule `yaml:"global_limit,omitempty"` // глобальный лимит для всех запросов
 }
 
 // RoutingRule правило маршрутизации
@@ -133,8 +136,17 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
+	// Подстановка переменных окружения ${VAR_NAME}
+	resolved := os.Expand(string(data), func(key string) string {
+		val := os.Getenv(key)
+		if val == "" {
+			return fmt.Sprintf("${%s}", key)
+		}
+		return val
+	})
+
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	if err := yaml.Unmarshal([]byte(resolved), &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
@@ -162,6 +174,9 @@ func (c *Config) setDefaults() {
 	}
 	if c.Server.IdleTimeout == 0 {
 		c.Server.IdleTimeout = 120 * time.Second
+	}
+	if c.Server.MaxRequestBodySize == 0 {
+		c.Server.MaxRequestBodySize = 10 << 20 // 10 MB
 	}
 
 	if c.TLS != nil && c.TLS.Enabled {
