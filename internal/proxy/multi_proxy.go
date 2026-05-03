@@ -148,6 +148,9 @@ func NewMultiProxy(cfg *config.Config, logger *zap.Logger) (*MultiProxy, error) 
 	handler = tracingMiddleware(mp.tracerProvider)(handler)
 	handler = requestIDMiddleware()(handler)
 	handler = recoveryMiddleware(logger)(handler)
+	if cfg.BasicAuth.Enabled {
+		handler = basicAuthMiddleware(cfg.BasicAuth.Username, cfg.BasicAuth.PasswordHash)(handler)
+	}
 	mp.handler = handler
 
 	return mp, nil
