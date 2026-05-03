@@ -98,9 +98,9 @@ type AuthRule struct {
 
 // BasicAuthConfig конфигурация Basic аутентификации
 type BasicAuthConfig struct {
-	Enabled      bool   `yaml:"enabled"`
-	Username     string `yaml:"username"`
-	PasswordHash string `yaml:"password_hash"`
+	Enabled  bool   `yaml:"enabled"`
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 // RateLimitRule конфигурация rate limiting для роута

@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"net/http"
+	"strings"
 )
 
 func basicAuthMiddleware(expectedUser, expectedPass string) Middleware {
@@ -13,14 +14,13 @@ func basicAuthMiddleware(expectedUser, expectedPass string) Middleware {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/health" || r.URL.Path == "/ready" {
+			if r.URL.Path == "/health" || r.URL.Path == "/ready" || strings.HasPrefix(r.URL.Path, "/api") {
 				next.ServeHTTP(w, r)
 				return
 			}
 
 			u, p, ok := r.BasicAuth()
 			if !ok {
-				w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -30,11 +30,11 @@ func basicAuthMiddleware(expectedUser, expectedPass string) Middleware {
 
 			if subtle.ConstantTimeCompare([]byte(uHash), []byte(expectedUserHash)) != 1 ||
 				subtle.ConstantTimeCompare([]byte(pHash), []byte(expectedPassHash)) != 1 {
-				w.Header().Set("WWW-Authenticate", `Basic realm="Restricted"`)
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
 
+			r.Header.Del("Authorization")
 			next.ServeHTTP(w, r)
 		})
 	}
