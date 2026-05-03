@@ -11,25 +11,25 @@ import (
 )
 
 type IPRateLimiter struct {
-	mu        sync.RWMutex
-	limiters  map[string]*rate.Limiter
-	lastSeen  map[string]time.Time
-	rate      rate.Limit
-	burst     int
+	mu              sync.RWMutex
+	limiters        map[string]*rate.Limiter
+	lastSeen        map[string]time.Time
+	rate            rate.Limit
+	burst           int
 	cleanupInterval time.Duration
-	ttl       time.Duration
-	stopCh    chan struct{}
+	ttl             time.Duration
+	stopCh          chan struct{}
 }
 
 func NewIPRateLimiter(r float64, burst int) *IPRateLimiter {
 	l := &IPRateLimiter{
-		limiters:  make(map[string]*rate.Limiter),
-		lastSeen:  make(map[string]time.Time),
-		rate:      rate.Limit(r),
-		burst:     burst,
+		limiters:        make(map[string]*rate.Limiter),
+		lastSeen:        make(map[string]time.Time),
+		rate:            rate.Limit(r),
+		burst:           burst,
 		cleanupInterval: 10 * time.Minute,
-		ttl:       time.Hour,
-		stopCh:    make(chan struct{}),
+		ttl:             time.Hour,
+		stopCh:          make(chan struct{}),
 	}
 	go l.cleanupLoop()
 	return l

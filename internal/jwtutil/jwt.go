@@ -22,14 +22,14 @@ var (
 
 // JWTValidator валидатор JWT токенов
 type JWTValidator struct {
-	secretKey    []byte
-	publicKey    interface{}
-	algorithm    string
-	validateExp  bool
-	validateIss  bool
-	expectedIss  string
-	validateAud  bool
-	expectedAud  string
+	secretKey   []byte
+	publicKey   interface{}
+	algorithm   string
+	validateExp bool
+	validateIss bool
+	expectedIss string
+	validateAud bool
+	expectedAud string
 }
 
 // NewJWTValidator создает новый валидатор JWT
@@ -40,12 +40,12 @@ func NewJWTValidator(secretKey, algorithm string,
 ) (*JWTValidator, error) {
 
 	v := &JWTValidator{
-		algorithm:    algorithm,
-		validateExp:  validateExp,
-		validateIss:  validateIss,
-		expectedIss:  expectedIss,
-		validateAud:  validateAud,
-		expectedAud:  expectedAud,
+		algorithm:   algorithm,
+		validateExp: validateExp,
+		validateIss: validateIss,
+		expectedIss: expectedIss,
+		validateAud: validateAud,
+		expectedAud: expectedAud,
 	}
 
 	prefix := strings.ToUpper(algorithm[:2])
