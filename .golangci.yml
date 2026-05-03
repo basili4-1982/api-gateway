@@ -1,0 +1,15 @@
+version: "2"
+linters:
+  default: standard
+  disable:
+    - errcheck
+  enable:
+    - misspell
+formatters:
+  enable:
+    - gofmt
+  settings:
+    gofmt:
+      simplify: true
+run:
+  timeout: 5m
