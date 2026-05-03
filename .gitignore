@@ -1,0 +1,40 @@
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# Config (sensitive data)
+config.local.yaml
+config.prod.yaml
+*.secret.yaml
+.env
+.env.local
+.env.prod
+
+# TLS / certificates
+*.pem
+*.key
+*.crt
+!internal/jwtutil/testdata/*.pem
+
+# Obsidian vault (documentation)
+docs/obsidian/
+
+# Build
+tmp/
+/dist/
+/build/
