@@ -98,9 +98,10 @@ type AuthRule struct {
 
 // BasicAuthConfig конфигурация Basic аутентификации
 type BasicAuthConfig struct {
-	Enabled  bool   `yaml:"enabled"`
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
+	Enabled   bool     `yaml:"enabled"`
+	Username  string   `yaml:"username"`
+	Password  string   `yaml:"password"`
+	SkipPaths []string `yaml:"skip_paths"` // пути, которые не требуют Basic Auth (с поддержкой префиксов)
 }
 
 // RateLimitRule конфигурация rate limiting для роута
