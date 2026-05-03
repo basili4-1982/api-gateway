@@ -151,8 +151,9 @@ func NewMultiProxy(cfg *config.Config, logger *zap.Logger) (*MultiProxy, error) 
 	if cfg.BasicAuth.Enabled {
 		logger.Info("Basic Auth enabled",
 			zap.String("username", cfg.BasicAuth.Username),
+			zap.Strings("skip_paths", cfg.BasicAuth.SkipPaths),
 		)
-		handler = basicAuthMiddleware(cfg.BasicAuth.Username, cfg.BasicAuth.Password)(handler)
+		handler = basicAuthMiddleware(cfg.BasicAuth)(handler)
 	}
 	mp.handler = handler
 
