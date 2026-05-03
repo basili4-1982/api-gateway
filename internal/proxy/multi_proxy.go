@@ -80,6 +80,8 @@ type MultiProxy struct {
 	httpServer   *http.Server
 	httpsServer  *http.Server
 	globalLimiter *rate.Limiter
+	handler       http.Handler
+	tracerProvider *TracerProvider
 }
 
 // HealthChecker проверяет здоровье таргета
@@ -115,6 +117,7 @@ func NewMultiProxy(cfg *config.Config, logger *zap.Logger) (*MultiProxy, error) 
 	}
 	mp.config.Store(cfg)
 	mp.initGlobalLimiter(cfg)
+	mp.tracerProvider, _ = NewTracerProvider("api-gateway", logger)
 
 	for _, targetCfg := range cfg.Targets {
 		targetProxy, err := mp.createTargetProxy(&targetCfg)
@@ -133,6 +136,19 @@ func NewMultiProxy(cfg *config.Config, logger *zap.Logger) (*MultiProxy, error) 
 		mp.routeConfigs = append(mp.routeConfigs, rc)
 		mp.routeByRule[rule] = &mp.routeConfigs[len(mp.routeConfigs)-1]
 	}
+
+	// Строим middleware цепочку
+	handler := mp.proxyHandler()
+	handler = corsPreflightMiddleware(mp, mp.metrics)(handler)
+	handler = spaStaticMiddleware(mp)(handler)
+	handler = globalRateLimitMiddleware(mp.globalLimiter, mp.metrics)(handler)
+	handler = metricsEndpointMiddleware(mp.metrics, cfg.MetricsAllowedIPs)(handler)
+	handler = healthProbeMiddleware()(handler)
+	handler = activeRequestMetricsMiddleware(mp.metrics)(handler)
+	handler = tracingMiddleware(mp.tracerProvider)(handler)
+	handler = requestIDMiddleware()(handler)
+	handler = recoveryMiddleware(logger)(handler)
+	mp.handler = handler
 
 	return mp, nil
 }
@@ -424,171 +440,13 @@ func (mp *MultiProxy) handlePreflight(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
-// ServeHTTP реализует http.Handler
+// ServeHTTP реализует http.Handler — делегирует в middleware цепочку
 func (mp *MultiProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Panic recovery — любой panic в хендлерах не роняет сервер
-	defer func() {
-		if rec := recover(); rec != nil {
-			mp.logger.Error("Panic recovered in ServeHTTP",
-				zap.Any("panic", rec),
-				zap.String("method", r.Method),
-				zap.String("path", r.URL.Path),
-				zap.String("remote_addr", r.RemoteAddr),
-				zap.Stack("stack"),
-			)
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		}
-	}()
-
-	startTime := time.Now()
-
-	// Request ID
-	reqID := r.Header.Get("X-Request-ID")
-	if reqID == "" {
-		reqID = generateRequestID()
-	}
-	r.Header.Set("X-Request-ID", reqID)
-	w.Header().Set("X-Request-ID", reqID)
-
-	// Trace ID
-	traceID := r.Header.Get("X-Trace-ID")
-	if traceID == "" {
-		traceID = reqID
-	}
-
-	rw := newResponseWriter(w)
-
-	// K8s liveness/readiness probes
-	if r.URL.Path == "/health" || r.URL.Path == "/ready" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok"}`))
-		return
-	}
-
-	// /metrics endpoint
-	if r.URL.Path == "/metrics" {
-		allowedIPs := mp.config.Load().MetricsAllowedIPs
-		if len(allowedIPs) > 0 {
-			clientIP := getClientIP(r)
-			allowed := false
-			for _, ip := range allowedIPs {
-				if clientIP == ip {
-					allowed = true
-					break
-				}
-			}
-			if !allowed {
-				http.Error(rw, "Forbidden", http.StatusForbidden)
-				return
-			}
-		}
-		mp.metrics.Handler().ServeHTTP(rw, r)
-		return
-	}
-
-	// Глобальный rate limiter
-	if mp.globalLimiter != nil && !mp.globalLimiter.Allow() {
-		rw.Header().Set("Retry-After", "1")
-		http.Error(rw, "Too many requests", http.StatusTooManyRequests)
-		mp.metrics.IncRateLimitDenial()
-		mp.metrics.IncRequests(r.Method, r.URL.Path, "429")
-		mp.logAccess(reqID, traceID, r, http.StatusTooManyRequests, 0, startTime, nil)
-		return
-	}
-
-	mp.metrics.IncActiveRequests()
-	defer mp.metrics.DecActiveRequests()
-
-	// SPA статика
-	if mp.config.Load().Static != nil {
-		if handled := mp.serveStatic(rw, r); handled {
-			return
-		}
-	}
-
-	// Обрабатываем OPTIONS запросы
-	if r.Method == http.MethodOptions {
-		mp.handlePreflight(rw, r)
-		mp.metrics.IncRequests(r.Method, r.URL.Path, "200")
-		return
-	}
-
-	// Находим целевой таргет
-	target, rule := mp.config.Load().FindTargetForPath(r.URL.Path, r.Method)
-	if target == nil {
-		mp.setCORSHeaders(rw.Header(), r)
-		mp.metrics.IncRequests(r.Method, r.URL.Path, "404")
-		http.Error(rw, "No route found", http.StatusNotFound)
-		mp.logAccess(reqID, traceID, r, rw.statusCode, 0, startTime, target)
-		return
-	}
-
-	// Получаем прокси для таргета
-	mp.mu.RLock()
-	targetProxy, exists := mp.targets[target.Name]
-	mp.mu.RUnlock()
-
-	if !exists || !targetProxy.isHealthy() {
-		mp.setCORSHeaders(rw.Header(), r)
-		mp.metrics.IncRequests(r.Method, r.URL.Path, "503")
-		http.Error(rw, "Target unavailable", http.StatusServiceUnavailable)
-		mp.logAccess(reqID, traceID, r, rw.statusCode, 0, startTime, target)
-		return
-	}
-
-	// Rate limiting
-	rc := mp.findRouteConfig(rule)
-	if rc != nil && rc.RateLimit != nil {
-		clientIP := getClientIP(r)
-		if !rc.RateLimit.Allow(clientIP) {
-			mp.setCORSHeaders(rw.Header(), r)
-			mp.metrics.IncRateLimitDenial()
-			mp.metrics.IncRequests(r.Method, r.URL.Path, "429")
-			http.Error(rw, "Too many requests", http.StatusTooManyRequests)
-			mp.logAccess(reqID, traceID, r, rw.statusCode, 0, startTime, target)
-			return
-		}
-	}
-
-	// Модифицируем путь
-	remainingPath := r.URL.Path
-	if rule != nil && rule.StripPath {
-		remainingPath = strings.TrimPrefix(r.URL.Path, rule.PathPrefix)
-		if !strings.HasPrefix(remainingPath, "/") {
-			remainingPath = "/" + remainingPath
-		}
-	}
-
-	// Модифицируем запрос (JWT валидация и заголовки)
-	if err := mp.modifyRequest(r, target, rule); err != nil {
-		mp.setCORSHeaders(rw.Header(), r)
-		mp.metrics.IncRequests(r.Method, r.URL.Path, "401")
-		http.Error(rw, err.Error(), http.StatusUnauthorized)
-		mp.logAccess(reqID, traceID, r, rw.statusCode, 0, startTime, target)
-		return
-	}
-
-	mp.logger.Debug("Proxying request",
-		zap.String("request_id", reqID),
-		zap.String("method", r.Method),
-		zap.String("path", r.URL.Path),
-		zap.String("target", target.Name),
-		zap.String("target_url", target.URL),
-		zap.String("remaining_path", remainingPath),
-	)
-
-	// Выполняем проксирование
-	mp.proxyRequest(rw, r, targetProxy, remainingPath)
-
-	mp.metrics.IncRequests(r.Method, r.URL.Path, fmt.Sprintf("%d", rw.statusCode))
-	mp.metrics.ObserveDuration(r.Method, r.URL.Path, time.Since(startTime))
-
-	mp.logAccess(reqID, traceID, r, rw.statusCode, time.Since(startTime), startTime, target)
+	mp.handler.ServeHTTP(w, r)
 }
 
 // logAccess пишет единую строчку access log
-func (mp *MultiProxy) logAccess(reqID, traceID string, r *http.Request, statusCode int, duration time.Duration, startTime time.Time, target *config.TargetConfig) {
+func (mp *MultiProxy) logAccess(reqID, traceID string, r *http.Request, statusCode int, duration time.Duration, target *config.TargetConfig) {
 	mp.logger.Info("Access",
 		zap.String("request_id", reqID),
 		zap.String("trace_id", traceID),
@@ -813,6 +671,10 @@ func (mp *MultiProxy) Stop(ctx context.Context) error {
 		if err := mp.httpsServer.Shutdown(ctx); err != nil {
 			mp.logger.Error("HTTPS server shutdown error", zap.Error(err))
 		}
+	}
+
+	if err := mp.tracerProvider.Shutdown(ctx); err != nil {
+		mp.logger.Error("Tracer provider shutdown error", zap.Error(err))
 	}
 
 	return nil
