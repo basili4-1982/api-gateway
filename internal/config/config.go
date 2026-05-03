@@ -1,0 +1,324 @@
+package config
+
+import (
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+)
+
+// Config представляет основную структуру конфигурации
+type Config struct {
+	App     `yaml:"application"`
+	Server  ServerConfig   `yaml:"server"`
+	TLS     *TLSConfig     `yaml:"tls,omitempty"`
+	Static  *StaticConfig  `yaml:"static,omitempty"`
+	Targets []TargetConfig `yaml:"targets"`
+	JWT     JWTConfig      `yaml:"jwt"`
+	Logging LoggingConfig  `yaml:"logging"`
+	Headers HeadersConfig  `yaml:"headers"`
+	Routing RoutingConfig  `yaml:"routing"`
+}
+
+// TLSConfig конфигурация TLS с автосертификатами (Let's Encrypt)
+type TLSConfig struct {
+	Enabled      bool     `yaml:"enabled"`       // включить HTTPS
+	Port         int      `yaml:"port"`          // HTTPS порт (по умолчанию 443)
+	HTTPPort     int      `yaml:"http_port"`     // HTTP порт для redirect (по умолчанию 80)
+	Domains      []string `yaml:"domains"`       // домены для сертификатов
+	Email        string   `yaml:"email"`         // email для Let's Encrypt (обязательно)
+	CacheDir     string   `yaml:"cache_dir"`     // директория для кеша сертификатов
+	Staging      bool     `yaml:"staging"`       // true = тестовый CA, false = production Let's Encrypt
+	RedirectHTTP bool     `yaml:"redirect_http"` // автоматический redirect HTTP → HTTPS
+}
+
+// StaticApp конфигурация SPA фронтенда
+type StaticApp struct {
+	PathPrefix string `yaml:"path_prefix"` // URL путь (например / или /admin)
+	RootDir    string `yaml:"root_dir"`    // директория со статикой
+	IndexFile  string `yaml:"index_file"`  // fallback для SPA (по умолчанию index.html)
+	MaxAge     int    `yaml:"max_age"`     // Cache-Control max-age в секундах
+}
+
+// StaticConfig конфигурация раздачи статических SPA
+type StaticConfig struct {
+	Apps []StaticApp `yaml:"apps"`
+}
+type App struct {
+	Env         string `yaml:"env"`
+	HealthCheck bool   `yaml:"health_check"`
+}
+
+// ServerConfig конфигурация HTTP сервера
+type ServerConfig struct {
+	Port         int           `yaml:"port"`
+	ReadTimeout  time.Duration `yaml:"read_timeout"`
+	WriteTimeout time.Duration `yaml:"write_timeout"`
+	IdleTimeout  time.Duration `yaml:"idle_timeout"`
+}
+
+// TargetConfig конфигурация целевого сервера
+type TargetConfig struct {
+	Name        string        `yaml:"name"`         // уникальное имя таргета
+	URL         string        `yaml:"url"`          // например: http://localhost:9001
+	Timeout     time.Duration `yaml:"timeout"`      // таймаут для запросов к цели
+	PathPrefix  string        `yaml:"path_prefix"`  // какой путь проксировать (опционально)
+	StripPrefix bool          `yaml:"strip_prefix"` // удалять префикс при проксировании
+	Weight      int           `yaml:"weight"`       // для балансировки (опционально)
+	HealthCheck string        `yaml:"health_check"` // URL для проверки здоровья
+}
+
+// RoutingConfig конфигурация маршрутизации
+type RoutingConfig struct {
+	Rules []RoutingRule `yaml:"rules"` // правила маршрутизации
+}
+
+// RoutingRule правило маршрутизации
+type RoutingRule struct {
+	PathPrefix string         `yaml:"path_prefix"`          // путь для матчинга
+	TargetName string         `yaml:"target_name"`          // имя таргета
+	Methods    []string       `yaml:"methods"`              // HTTP методы (опционально)
+	StripPath  bool           `yaml:"strip_path"`           // удалять префикс при проксировании
+	Auth       *AuthRule      `yaml:"auth,omitempty"`       // per-route auth конфиг
+	RateLimit  *RateLimitRule `yaml:"rate_limit,omitempty"` // per-route rate limit
+}
+
+// AuthRule конфигурация аутентификации для роута
+type AuthRule struct {
+	Required   bool     `yaml:"required"`              // требовать ли JWT
+	Roles      []string `yaml:"roles,omitempty"`       // требуемые роли (опционально)
+	StripToken *bool    `yaml:"strip_token,omitempty"` // удалять токен (наследует глобальный если не указан)
+}
+
+// RateLimitRule конфигурация rate limiting для роута
+type RateLimitRule struct {
+	RequestsPerSecond float64 `yaml:"requests_per_second"` // запросов в секунду
+	Burst             int     `yaml:"burst"`               // burst размер
+}
+
+// JWTConfig конфигурация валидации JWT
+type JWTConfig struct {
+	SecretKey     string   `yaml:"secret_key"`      // симметричный ключ (HMAC)
+	PublicKeyFile string   `yaml:"public_key_file"` // для RSA/ECDSA
+	Algorithm     string   `yaml:"algorithm"`       // HS256, RS256 и т.д.
+	ValidateExp   bool     `yaml:"validate_exp"`    // проверять срок действия
+	ValidateIss   bool     `yaml:"validate_iss"`    // проверять issuer
+	ExpectedIss   string   `yaml:"expected_iss"`    // ожидаемый issuer
+	ValidateAud   bool     `yaml:"validate_aud"`    // проверять audience
+	ExpectedAud   string   `yaml:"expected_aud"`    // ожидаемый audience
+	ClaimMappings []string `yaml:"claim_mappings"`  // какие claims извлекать
+	Required      bool     `yaml:"required"`        // требовать ли JWT
+}
+
+// HeadersConfig конфигурация заголовков
+type HeadersConfig struct {
+	StripAuthorization bool              `yaml:"strip_authorization"` // удалять ли Authorization
+	ForwardHeaders     []string          `yaml:"forward_headers"`     // какие заголовки пробрасывать
+	ClaimToHeader      map[string]string `yaml:"claim_to_header"`     // маппинг claim -> header
+	AddHeaders         map[string]string `yaml:"add_headers"`         // статические заголовки
+}
+
+// LoggingConfig конфигурация логирования
+type LoggingConfig struct {
+	Level  string `yaml:"level"`  // debug, info, warn, error
+	Format string `yaml:"format"` // json или text
+}
+
+// Load загружает конфигурацию из файла
+func Load(path string) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	}
+
+	// Устанавливаем значения по умолчанию
+	cfg.setDefaults()
+
+	// Валидация конфигурации
+	if err := cfg.validate(); err != nil {
+		return nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	return &cfg, nil
+}
+
+// setDefaults устанавливает значения по умолчанию
+func (c *Config) setDefaults() {
+	if c.Server.Port == 0 {
+		c.Server.Port = 8080
+	}
+	if c.Server.ReadTimeout == 0 {
+		c.Server.ReadTimeout = 5 * time.Second
+	}
+	if c.Server.WriteTimeout == 0 {
+		c.Server.WriteTimeout = 10 * time.Second
+	}
+	if c.Server.IdleTimeout == 0 {
+		c.Server.IdleTimeout = 120 * time.Second
+	}
+
+	if c.TLS != nil && c.TLS.Enabled {
+		if c.TLS.Port == 0 {
+			c.TLS.Port = 443
+		}
+		if c.TLS.HTTPPort == 0 {
+			c.TLS.HTTPPort = 80
+		}
+		if c.TLS.CacheDir == "" {
+			c.TLS.CacheDir = "/var/lib/api-gateway/certs"
+		}
+	}
+
+	if c.Static != nil {
+		for i := range c.Static.Apps {
+			if c.Static.Apps[i].IndexFile == "" {
+				c.Static.Apps[i].IndexFile = "index.html"
+			}
+		}
+	}
+
+	// Устанавливаем таймауты для таргетов, если не заданы
+	for i := range c.Targets {
+		if c.Targets[i].Timeout == 0 {
+			c.Targets[i].Timeout = 30 * time.Second
+		}
+	}
+
+	if c.JWT.Algorithm == "" {
+		c.JWT.Algorithm = "HS256"
+	}
+	if c.Logging.Level == "" {
+		c.Logging.Level = "info"
+	}
+	if c.Logging.Format == "" {
+		c.Logging.Format = "text"
+	}
+	if len(c.JWT.ClaimMappings) == 0 {
+		// По умолчанию извлекаем sub как user_id
+		c.JWT.ClaimMappings = []string{"sub"}
+		if c.Headers.ClaimToHeader == nil {
+			c.Headers.ClaimToHeader = make(map[string]string)
+		}
+		if _, ok := c.Headers.ClaimToHeader["sub"]; !ok {
+			c.Headers.ClaimToHeader["sub"] = "X-User-ID"
+		}
+	}
+
+	// Создаем правила маршрутизации из таргетов, если не заданы явно
+	if len(c.Routing.Rules) == 0 {
+		for _, target := range c.Targets {
+			if target.PathPrefix != "" {
+				c.Routing.Rules = append(c.Routing.Rules, RoutingRule{
+					PathPrefix: target.PathPrefix,
+					TargetName: target.Name,
+					StripPath:  target.StripPrefix,
+				})
+			}
+		}
+	}
+}
+
+// validate проверяет корректность конфигурации
+func (c *Config) validate() error {
+	if len(c.Targets) == 0 {
+		return fmt.Errorf("at least one target is required")
+	}
+
+	// Проверяем уникальность имен таргетов
+	targetNames := make(map[string]bool)
+	for _, target := range c.Targets {
+		if target.Name == "" {
+			return fmt.Errorf("target name is required")
+		}
+		if targetNames[target.Name] {
+			return fmt.Errorf("duplicate target name: %s", target.Name)
+		}
+		targetNames[target.Name] = true
+
+		if target.URL == "" {
+			return fmt.Errorf("target.url is required for target %s", target.Name)
+		}
+	}
+
+	// Проверяем правила маршрутизации
+	for _, rule := range c.Routing.Rules {
+		if rule.PathPrefix == "" {
+			return fmt.Errorf("routing rule path_prefix is required")
+		}
+		if !targetNames[rule.TargetName] {
+			return fmt.Errorf("routing rule references unknown target: %s", rule.TargetName)
+		}
+	}
+
+	// Проверяем TLS конфигурацию
+	if c.TLS != nil && c.TLS.Enabled {
+		if len(c.TLS.Domains) == 0 {
+			return fmt.Errorf("at least one domain is required when TLS is enabled")
+		}
+		if c.TLS.Email == "" {
+			return fmt.Errorf("email is required for Let's Encrypt registration")
+		}
+	}
+
+	// Проверяем JWT конфигурацию
+	if c.JWT.Required {
+		if c.JWT.SecretKey == "" && c.JWT.PublicKeyFile == "" {
+			return fmt.Errorf("either jwt.secret_key or jwt.public_key_file must be provided when JWT is required")
+		}
+	}
+
+	return nil
+}
+
+// GetTargetByName возвращает таргет по имени
+func (c *Config) GetTargetByName(name string) *TargetConfig {
+	for _, target := range c.Targets {
+		if target.Name == name {
+			return &target
+		}
+	}
+	return nil
+}
+
+// FindTargetForPath находит таргет для пути на основе правил маршрутизации
+func (c *Config) FindTargetForPath(path string, method string) (*TargetConfig, *RoutingRule) {
+	var bestMatch *RoutingRule
+	var bestMatchLen int
+
+	for _, rule := range c.Routing.Rules {
+		// Проверяем метод, если указан
+		if len(rule.Methods) > 0 {
+			methodAllowed := false
+			for _, m := range rule.Methods {
+				if strings.EqualFold(m, method) {
+					methodAllowed = true
+					break
+				}
+			}
+			if !methodAllowed {
+				continue
+			}
+		}
+
+		// Ищем самый длинный совпадающий префикс
+		if strings.HasPrefix(path, rule.PathPrefix) {
+			if len(rule.PathPrefix) > bestMatchLen {
+				bestMatch = &rule
+				bestMatchLen = len(rule.PathPrefix)
+			}
+		}
+	}
+
+	if bestMatch != nil {
+		return c.GetTargetByName(bestMatch.TargetName), bestMatch
+	}
+
+	return nil, nil
+}

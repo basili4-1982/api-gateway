@@ -1,0 +1,159 @@
+server:
+  port: 8080
+  read_timeout: 5s
+  write_timeout: 10s
+  idle_timeout: 120s
+
+application:
+  env: "dev"          # dev/prod
+  health_check: true
+
+# TLS с автоматическими сертификатами Let's Encrypt
+# Раскомментируйте для продакшена:
+# tls:
+#   enabled: true
+#   port: 443
+#   http_port: 80
+#   domains:
+#     - "api.example.com"
+#   email: "admin@example.com"
+#   cache_dir: "/var/lib/api-gateway/certs"
+#   staging: false
+#   redirect_http: true
+
+# Целевые сервисы (микросервисы)
+targets:
+  - name: "auth-api"
+    url: "http://auth-api:9001"
+    timeout: 10s
+    path_prefix: "/api/v1/auth"
+    strip_prefix: false
+    health_check: "http://auth-api:9001/health"
+
+  - name: "client-api"
+    url: "http://client-api:9002"
+    timeout: 30s
+    path_prefix: "/api/v1/client"
+    strip_prefix: false
+    health_check: "http://client-api:9002/health"
+
+  - name: "admin-api"
+    url: "http://admin-api:9003"
+    timeout: 30s
+    path_prefix: "/api/v1/admin"
+    strip_prefix: false
+    health_check: "http://admin-api:9003/health"
+
+  - name: "storage-api"
+    url: "http://storage-api:9004"
+    timeout: 60s
+    path_prefix: "/api/v1/storage"
+    strip_prefix: false
+    health_check: "http://storage-api:9004/health"
+
+# Правила маршрутизации с per-route JWT и rate limiting
+routing:
+  rules:
+    # Публичные endpoint-ы (без JWT)
+    - path_prefix: "/api/v1/auth/login"
+      target_name: "auth-api"
+      methods: ["POST"]
+      strip_path: false
+      rate_limit:
+        requests_per_second: 10
+        burst: 20
+
+    - path_prefix: "/api/v1/auth/register"
+      target_name: "auth-api"
+      methods: ["POST"]
+      strip_path: false
+      rate_limit:
+        requests_per_second: 5
+        burst: 10
+
+    - path_prefix: "/api/v1/auth/refresh"
+      target_name: "auth-api"
+      methods: ["POST"]
+      strip_path: false
+      auth:
+        required: false   # явно разрешаем без токена
+      rate_limit:
+        requests_per_second: 10
+        burst: 20
+
+    - path_prefix: "/api/v1/auth"
+      target_name: "auth-api"
+      strip_path: false
+      auth:
+        required: true
+      rate_limit:
+        requests_per_second: 30
+        burst: 50
+
+    # Клиентский API (требует JWT, базовые роли)
+    - path_prefix: "/api/v1/client"
+      target_name: "client-api"
+      strip_path: false
+      auth:
+        required: true
+        roles: ["user", "admin"]
+      rate_limit:
+        requests_per_second: 100
+        burst: 200
+
+    # Административный API (только admin)
+    - path_prefix: "/api/v1/admin"
+      target_name: "admin-api"
+      strip_path: false
+      auth:
+        required: true
+        roles: ["admin"]
+        strip_token: false   # админский JWT пробрасывается дальше
+      rate_limit:
+        requests_per_second: 50
+        burst: 100
+
+    # Storage API (JWT опционально, можно загружать файлы)
+    - path_prefix: "/api/v1/storage/public"
+      target_name: "storage-api"
+      strip_path: false
+      auth:
+        required: false
+      rate_limit:
+        requests_per_second: 20
+        burst: 40
+
+    - path_prefix: "/api/v1/storage"
+      target_name: "storage-api"
+      strip_path: false
+      auth:
+        required: true
+      rate_limit:
+        requests_per_second: 30
+        burst: 50
+
+jwt:
+  secret_key: "change-me-to-a-secure-secret-at-least-256-bits-long"
+  algorithm: "HS256"
+  validate_exp: true
+  validate_iss: false
+  validate_aud: false
+  required: false                   # глобально JWT не обязателен, per-route управление
+  claim_mappings:
+    - "id"
+    - "email"
+    - "roles"
+
+headers:
+  strip_authorization: true         # по умолчанию JWT не передаётся бэкендам
+  claim_to_header:
+    id: "X-User-ID"
+    email: "X-User-Email"
+    roles: "X-User-Roles"
+  add_headers:
+    X-Gateway-Version: "1.0.0"
+    X-Gateway-Name: "API-Gateway"
+
+logging:
+  level: "debug"
+  format: "console"
