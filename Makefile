@@ -1,26 +1,41 @@
-BINARY ?= api-gateway
-CONFIG ?= /etc/proxy/config.yaml
+BINARY   ?= api-gateway
+BIN_DIR  ?= bin
+CONFIG   ?= /etc/proxy/config.yaml
 
-.PHONY: build run test lint clean docker-build coverage
+GO       ?= go
+GOLANGCI ?= golangci-lint
+
+.PHONY: all build run test lint coverage clean docker-build fmt vet
+
+all: fmt vet lint build test
 
 build:
-	go build -ldflags="-w -s" -trimpath -o $(BINARY) ./cmd/
+	$(GO) build -ldflags="-w -s" -trimpath -o $(BIN_DIR)/$(BINARY) ./cmd/
 
 run: build
-	./$(BINARY) -config $(CONFIG)
+	./$(BIN_DIR)/$(BINARY) -config $(CONFIG)
 
 test:
-	go test -v -race -count=1 ./...
+	$(GO) test -v -race -count=1 -coverprofile=$(BIN_DIR)/coverage.out ./...
+	$(GO) tool cover -func=$(BIN_DIR)/coverage.out
 
 lint:
-	golangci-lint run ./...
+	$(GOLANGCI) run ./...
 
-coverage:
-	go test -race -count=1 -coverprofile=coverage.out ./...
-	go tool cover -html=coverage.out -o coverage.html
+coverage: test
+	$(GO) tool cover -html=$(BIN_DIR)/coverage.out -o $(BIN_DIR)/coverage.html
+
+vet:
+	$(GO) vet ./...
+
+fmt:
+	$(GO) fmt ./...
 
 clean:
-	rm -f $(BINARY) coverage.out coverage.html
+	rm -rf $(BIN_DIR)
 
 docker-build:
 	docker build -t $(BINARY) .
+
+docker-buildx:
+	docker buildx build --platform linux/amd64 -t $(BINARY) .
