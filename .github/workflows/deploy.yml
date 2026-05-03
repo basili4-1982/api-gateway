@@ -25,8 +25,9 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ secrets.DEPLOY_PORT }}
           script: |
-            export COMPOSE_FILE=/opt/new-cml/docker-compose.prod.yml
+            cd /opt/new-cml
             docker compose pull api-gateway
             docker compose up -d --force-recreate api-gateway
             docker image prune -f
