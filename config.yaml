@@ -51,6 +51,13 @@ targets:
     strip_prefix: false
     health_check: "http://storage-api:9004/health"
 
+  - name: "fgis-writer"
+    url: "http://fgis-writer:8083"
+    timeout: 10s
+    path_prefix: "/api/v1/fgis"
+    strip_prefix: false
+    health_check: "http://fgis-writer:8083/health"
+
 # Правила маршрутизации с per-route JWT и rate limiting
 routing:
   rules:
@@ -131,6 +138,16 @@ routing:
       rate_limit:
         requests_per_second: 30
         burst: 50
+
+    # FGIS Writer API (справочник типов СИ, без JWT — публичный поиск)
+    - path_prefix: "/api/v1/fgis"
+      target_name: "fgis-writer"
+      strip_path: false
+      auth:
+        required: false
+      rate_limit:
+        requests_per_second: 50
+        burst: 100
 
 jwt:
   secret_key: "change-me-to-a-secure-secret-at-least-256-bits-long"
