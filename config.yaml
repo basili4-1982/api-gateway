@@ -58,6 +58,13 @@ targets:
     strip_prefix: false
     health_check: "http://fgis-writer:8083/health"
 
+  - name: "xlsx-generator"
+    url: "http://xlsx-generator:8080"
+    timeout: 30s
+    path_prefix: "/api/v1/reports"
+    strip_prefix: false
+    health_check: "http://xlsx-generator:8080/health"
+
 # Правила маршрутизации с per-route JWT и rate limiting
 routing:
   rules:
@@ -148,6 +155,26 @@ routing:
       rate_limit:
         requests_per_second: 50
         burst: 100
+
+    # XLSX Generator (генерация отчётов, публичный download)
+    - path_prefix: "/api/v1/reports/download"
+      target_name: "xlsx-generator"
+      strip_path: false
+      auth:
+        required: false
+      rate_limit:
+        requests_per_second: 20
+        burst: 40
+
+    - path_prefix: "/api/v1/reports/generate"
+      target_name: "xlsx-generator"
+      strip_path: true
+      methods: ["POST"]
+      auth:
+        required: true
+      rate_limit:
+        requests_per_second: 5
+        burst: 10
 
 jwt:
   secret_key: "change-me-to-a-secure-secret-at-least-256-bits-long"
