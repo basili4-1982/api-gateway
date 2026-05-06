@@ -1,6 +1,8 @@
-name: Deploy Gateway
+name: Build and Deploy Gateway
 
 on:
+  push:
+    branches: [master]
   workflow_dispatch:
     inputs:
       tag:
@@ -9,15 +11,26 @@ on:
         default: 'latest'
 
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
+  build-and-deploy:
+    runs-on: [self-hosted, linux, x64, vm170581]
     steps:
+      - uses: actions/checkout@v4
+
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: basili4-1982
           password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/basili4-1982/api-gateway:${{ github.sha }}
+            ghcr.io/basili4-1982/api-gateway:latest
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
@@ -26,9 +39,10 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT }}
+          command_timeout: 5m
           script: |
             cd /opt/new-cml
-            export IMAGE_TAG=${{ github.event.inputs.tag || 'latest' }}
+            export IMAGE_TAG=${{ github.sha }}
             sed -i "s|image: ghcr.io/basili4-1982/api-gateway:.*|image: ghcr.io/basili4-1982/api-gateway:${IMAGE_TAG}|" docker-compose.prod.yml
             docker compose pull api-gateway
             docker compose up -d --force-recreate api-gateway
