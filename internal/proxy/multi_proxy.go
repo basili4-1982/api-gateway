@@ -503,6 +503,11 @@ func (tp *TargetProxy) setHealthy(healthy bool) {
 	tp.mu.Lock()
 	defer tp.mu.Unlock()
 	tp.healthy = healthy
+
+	if healthy && tp.cbState == stateOpen {
+		tp.cbState = stateHalfOpen
+		tp.halfOpenProbe.Store(true)
+	}
 }
 
 // recordCall регистрирует результат запроса для circuit breaker
