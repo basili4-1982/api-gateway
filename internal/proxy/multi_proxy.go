@@ -398,13 +398,6 @@ func (mp *MultiProxy) proxyRequest(w http.ResponseWriter, r *http.Request, targe
 		zap.Int("status", resp.StatusCode),
 	)
 
-	// Circuit breaker: 5xx считается ошибкой
-	if resp.StatusCode >= 500 {
-		target.recordCall(fmt.Errorf("upstream %d", resp.StatusCode))
-	} else {
-		target.recordCall(nil)
-	}
-
 	// Копируем заголовки ответа от бэкенда
 	for key, values := range resp.Header {
 		for _, value := range values {
