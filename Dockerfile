@@ -20,7 +20,6 @@ RUN  mkdir -p /etc/proxy
 
 # Копируем код и собираем
 COPY . .
-COPY config.yaml /etc/proxy/
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -ldflags="-w -s" -trimpath -o api-gateway ./cmd/
 
