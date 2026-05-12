@@ -124,12 +124,23 @@ type JWTConfig struct {
 	Required      bool     `yaml:"required"`        // требовать ли JWT
 }
 
+// CORSConfig настройки CORS
+type CORSConfig struct {
+	Enabled        bool     `yaml:"enabled"`
+	AllowedOrigins []string `yaml:"allowed_origins"`
+	AllowedMethods []string `yaml:"allowed_methods"`
+	AllowedHeaders []string `yaml:"allowed_headers"`
+	ExposeHeaders  []string `yaml:"expose_headers"`
+	MaxAge         int      `yaml:"max_age"`
+}
+
 // HeadersConfig конфигурация заголовков
 type HeadersConfig struct {
-	StripAuthorization bool              `yaml:"strip_authorization"` // удалять ли Authorization
-	ForwardHeaders     []string          `yaml:"forward_headers"`     // какие заголовки пробрасывать
-	ClaimToHeader      map[string]string `yaml:"claim_to_header"`     // маппинг claim -> header
-	AddHeaders         map[string]string `yaml:"add_headers"`         // статические заголовки
+	StripAuthorization bool              `yaml:"strip_authorization"`
+	ForwardHeaders     bool              `yaml:"forward_headers"`
+	ClaimToHeader      map[string]string `yaml:"claim_to_header"`
+	AddHeaders         map[string]string `yaml:"add_headers"`
+	CORS               *CORSConfig       `yaml:"cors,omitempty"`
 }
 
 // LoggingConfig конфигурация логирования
