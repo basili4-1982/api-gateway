@@ -162,22 +162,65 @@ func NewMultiProxy(cfg *config.Config, logger *zap.Logger) (*MultiProxy, error) 
 
 // setCORSHeaders устанавливает CORS заголовки
 func (mp *MultiProxy) setCORSHeaders(header http.Header, r *http.Request) {
-	if mp.config.Load().Env != "dev" {
+	cfg := mp.config.Load()
+	if cfg.Headers.CORS != nil && cfg.Headers.CORS.Enabled {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			origin = "*"
+		}
+		allowed := false
+		for _, o := range cfg.Headers.CORS.AllowedOrigins {
+			if o == "*" || o == origin {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return
+		}
+		header.Set("Access-Control-Allow-Origin", origin)
+		if len(cfg.Headers.CORS.AllowedMethods) > 0 {
+			header.Set("Access-Control-Allow-Methods", joinStrings(cfg.Headers.CORS.AllowedMethods))
+		} else {
+			header.Set("Access-Control-Allow-Methods", corsHeaders["Access-Control-Allow-Methods"])
+		}
+		if len(cfg.Headers.CORS.AllowedHeaders) > 0 {
+			header.Set("Access-Control-Allow-Headers", joinStrings(cfg.Headers.CORS.AllowedHeaders))
+		} else {
+			header.Set("Access-Control-Allow-Headers", corsHeaders["Access-Control-Allow-Headers"])
+		}
+		if len(cfg.Headers.CORS.ExposeHeaders) > 0 {
+			header.Set("Access-Control-Expose-Headers", joinStrings(cfg.Headers.CORS.ExposeHeaders))
+		} else {
+			header.Set("Access-Control-Expose-Headers", corsHeaders["Access-Control-Expose-Headers"])
+		}
+		header.Set("Access-Control-Allow-Credentials", corsHeaders["Access-Control-Allow-Credentials"])
+		if cfg.Headers.CORS.MaxAge > 0 {
+			header.Set("Access-Control-Max-Age", fmt.Sprintf("%d", cfg.Headers.CORS.MaxAge))
+		} else {
+			header.Set("Access-Control-Max-Age", corsHeaders["Access-Control-Max-Age"])
+		}
+		header.Add("Vary", "Origin")
 		return
 	}
 
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		origin = "*"
+	if cfg.Env == "dev" {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			origin = "*"
+		}
+		header.Set("Access-Control-Allow-Origin", origin)
+		header.Set("Access-Control-Allow-Methods", corsHeaders["Access-Control-Allow-Methods"])
+		header.Set("Access-Control-Allow-Headers", corsHeaders["Access-Control-Allow-Headers"])
+		header.Set("Access-Control-Expose-Headers", corsHeaders["Access-Control-Expose-Headers"])
+		header.Set("Access-Control-Allow-Credentials", corsHeaders["Access-Control-Allow-Credentials"])
+		header.Set("Access-Control-Max-Age", corsHeaders["Access-Control-Max-Age"])
+		header.Add("Vary", "Origin")
 	}
+}
 
-	header.Set("Access-Control-Allow-Origin", origin)
-	header.Set("Access-Control-Allow-Methods", corsHeaders["Access-Control-Allow-Methods"])
-	header.Set("Access-Control-Allow-Headers", corsHeaders["Access-Control-Allow-Headers"])
-	header.Set("Access-Control-Expose-Headers", corsHeaders["Access-Control-Expose-Headers"])
-	header.Set("Access-Control-Allow-Credentials", corsHeaders["Access-Control-Allow-Credentials"])
-	header.Set("Access-Control-Max-Age", corsHeaders["Access-Control-Max-Age"])
-	header.Add("Vary", "Origin")
+func joinStrings(strs []string) string {
+	return strings.Join(strs, ", ")
 }
 
 // findRouteConfig возвращает RouteConfig для данного RoutingRule
