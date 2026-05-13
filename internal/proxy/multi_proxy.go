@@ -18,6 +18,7 @@ import (
 
 	"github.com/basili4-1982/api-gateway/internal/config"
 	"github.com/basili4-1982/api-gateway/internal/jwtutil"
+	"github.com/basili4-1982/api-gateway/internal/permissions"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -80,8 +81,9 @@ type MultiProxy struct {
 	httpServer     *http.Server
 	httpsServer    *http.Server
 	globalLimiter  *rate.Limiter
-	handler        http.Handler
-	tracerProvider *TracerProvider
+	handler              http.Handler
+	tracerProvider       *TracerProvider
+	permissionsManager   *permissions.Manager
 }
 
 // HealthChecker проверяет здоровье таргета
@@ -154,6 +156,15 @@ func NewMultiProxy(cfg *config.Config, logger *zap.Logger) (*MultiProxy, error) 
 			zap.Strings("skip_paths", cfg.BasicAuth.SkipPaths),
 		)
 		handler = basicAuthMiddleware(cfg.BasicAuth)(handler)
+	}
+
+	if cfg.Permissions.Enabled {
+		mp.permissionsManager = permissions.NewManager(&cfg.Permissions, logger)
+		handler = cacheInvalidateMiddleware(mp)(handler)
+		logger.Info("Permissions module enabled",
+			zap.String("service_url", cfg.Permissions.ServiceURL),
+			zap.Duration("cache_ttl", cfg.Permissions.CacheTTL),
+		)
 	}
 	mp.handler = handler
 
@@ -306,6 +317,22 @@ func (mp *MultiProxy) modifyRequest(r *http.Request, targetCfg *config.TargetCon
 			for claimName, headerName := range mp.config.Load().Headers.ClaimToHeader {
 				if val, ok := extracted[claimName]; ok {
 					r.Header.Set(headerName, fmt.Sprintf("%v", val))
+				}
+			}
+
+			// X-User-Permissions: если включён модуль permissions
+			if mp.permissionsManager != nil {
+				userIDVal, ok := extracted["id"]
+				if ok {
+					userID, err := toInt(userIDVal)
+					if err == nil {
+						if err := mp.permissionsManager.SetHeader(r, userID); err != nil {
+							mp.logger.Warn("failed to set permissions header",
+								zap.Int("user_id", userID),
+								zap.Error(err),
+							)
+						}
+					}
 				}
 			}
 		}
@@ -839,6 +866,18 @@ func cacheControlMiddleware(next http.Handler, maxAge int) http.Handler {
 }
 
 // initGlobalLimiter настраивает глобальный rate limiter из конфига
+func cacheInvalidateMiddleware(mp *MultiProxy) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/_cache/permissions/invalidate" {
+				mp.permissionsManager.InvalidateCacheHandler(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func (mp *MultiProxy) initGlobalLimiter(cfg *config.Config) {
 	if cfg.Routing.GlobalLimit != nil && cfg.Routing.GlobalLimit.RequestsPerSecond > 0 {
 		mp.globalLimiter = rate.NewLimiter(
@@ -866,5 +905,20 @@ func (mp *MultiProxy) reloadGlobalLimiter(cfg *config.Config) {
 		}
 	} else {
 		mp.globalLimiter = nil
+	}
+}
+
+func toInt(v interface{}) (int, error) {
+	switch val := v.(type) {
+	case float64:
+		return int(val), nil
+	case int:
+		return val, nil
+	case string:
+		var result int
+		_, err := fmt.Sscanf(val, "%d", &result)
+		return result, err
+	default:
+		return 0, fmt.Errorf("cannot convert %T to int", v)
 	}
 }
