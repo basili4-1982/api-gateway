@@ -20,7 +20,8 @@ type Config struct {
 	BasicAuth BasicAuthConfig `yaml:"basic_auth"`
 	Logging   LoggingConfig   `yaml:"logging"`
 	Headers   HeadersConfig   `yaml:"headers"`
-	Routing   RoutingConfig   `yaml:"routing"`
+	Routing   RoutingConfig      `yaml:"routing"`
+	Permissions PermissionsConfig `yaml:"permissions"`
 }
 
 // TLSConfig конфигурация TLS с автосертификатами (Let's Encrypt)
@@ -132,6 +133,15 @@ type CORSConfig struct {
 	AllowedHeaders []string `yaml:"allowed_headers"`
 	ExposeHeaders  []string `yaml:"expose_headers"`
 	MaxAge         int      `yaml:"max_age"`
+}
+
+// PermissionsConfig конфигурация модуля разрешений (permission-service)
+type PermissionsConfig struct {
+	Enabled           bool          `yaml:"enabled"`
+	ServiceURL        string        `yaml:"service_url"`
+	CacheTTL          time.Duration `yaml:"cache_ttl"`
+	HeaderName        string        `yaml:"header_name"`
+	InvalidateToken   string        `yaml:"invalidate_token"`
 }
 
 // HeadersConfig конфигурация заголовков
@@ -304,9 +314,21 @@ func (c *Config) validate() error {
 
 	// Проверяем JWT конфигурацию
 	if c.JWT.Required {
-		if c.JWT.SecretKey == "" && c.JWT.PublicKeyFile == "" {
-			return fmt.Errorf("either jwt.secret_key or jwt.public_key_file must be provided when JWT is required")
-		}
+		c.JWT.ValidateExp = true
+	}
+
+	if c.Permissions.CacheTTL == 0 {
+		c.Permissions.CacheTTL = 300 * time.Second
+	}
+	if c.Permissions.HeaderName == "" {
+		c.Permissions.HeaderName = "X-User-Permissions"
+	}
+	if c.Permissions.InvalidateToken == "" {
+		c.Permissions.InvalidateToken = "change-me"
+	}
+
+	if c.Permissions.Enabled && c.Permissions.ServiceURL == "" {
+		return fmt.Errorf("permissions.service_url is required when permissions.enabled is true")
 	}
 
 	return nil
