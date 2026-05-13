@@ -142,6 +142,7 @@ type PermissionsConfig struct {
 	CacheTTL          time.Duration `yaml:"cache_ttl"`
 	HeaderName        string        `yaml:"header_name"`
 	InvalidateToken   string        `yaml:"invalidate_token"`
+	APIKey            string        `yaml:"api_key"`
 }
 
 // HeadersConfig конфигурация заголовков
