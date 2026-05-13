@@ -10,12 +10,14 @@ import (
 
 type Client struct {
 	baseURL    string
+	apiKey     string
 	httpClient *http.Client
 }
 
-func NewClient(baseURL string) *Client {
+func NewClient(baseURL, apiKey string) *Client {
 	return &Client{
 		baseURL: baseURL,
+		apiKey:  apiKey,
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
 		},
@@ -33,7 +35,15 @@ type UserPermissions struct {
 func (c *Client) GetEffectivePermissions(userID int) (*UserPermissions, error) {
 	url := fmt.Sprintf("%s/api/v1/users/%d/effective-permissions", c.baseURL, userID)
 
-	resp, err := c.httpClient.Get(url)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	if c.apiKey != "" {
+		req.Header.Set("X-API-Key", c.apiKey)
+	}
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request to permission-service: %w", err)
 	}
