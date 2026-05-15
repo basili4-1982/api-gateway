@@ -104,13 +104,25 @@ routing:
         requests_per_second: 30
         burst: 50
 
-    # Organization (фронтенд ходит в /api/organization, бэк ждёт /organization)
+    # Organization (frontend calls /api/organization, backend expects /organization)
     - path_prefix: "/api/organization"
       target_name: "client-api"
       strip_path: true
       auth:
         required: true
         roles: ["user", "admin"]
+      rate_limit:
+        requests_per_second: 50
+        burst: 100
+
+    # Admin organization (frontend calls /api/admin/organization, backend expects /organization)
+    - path_prefix: "/api/admin/organization"
+      target_name: "admin-api"
+      strip_path: true
+      auth:
+        required: true
+        roles: ["admin"]
+        strip_token: false
       rate_limit:
         requests_per_second: 50
         burst: 100
