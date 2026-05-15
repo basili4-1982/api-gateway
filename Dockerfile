@@ -16,11 +16,8 @@ RUN echo "machine github.com" > ~/.netrc &&  \
 COPY go.mod go.sum ./
 RUN go mod download
 
-RUN  mkdir -p /etc/proxy
-
 # Копируем код и собираем
 COPY . .
-COPY config.yaml /etc/proxy/
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -ldflags="-w -s" -trimpath -o api-gateway ./cmd/
 
@@ -28,8 +25,6 @@ FROM scratch
 
 # Копируем сертификаты и timezone
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-# Копирую конфиг по умолчанию
-COPY --from=builder /etc/proxy /etc/proxy
 
 # Копируем бинарник
 COPY --from=builder /build/api-gateway /app/api-gateway
