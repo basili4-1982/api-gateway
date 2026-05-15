@@ -104,6 +104,47 @@ routing:
         requests_per_second: 30
         burst: 50
 
+    # Публичные auth-эндпоинты (без JWT)
+    - path_prefix: "/api/auth/methods"
+      target_name: "auth-api"
+      methods: ["GET"]
+      strip_path: false
+      auth:
+        required: false
+      rate_limit:
+        requests_per_second: 20
+        burst: 40
+
+    - path_prefix: "/api/auth/login"
+      target_name: "auth-api"
+      methods: ["POST"]
+      strip_path: false
+      auth:
+        required: false
+      rate_limit:
+        requests_per_second: 10
+        burst: 20
+
+    - path_prefix: "/api/auth/register"
+      target_name: "auth-api"
+      methods: ["POST"]
+      strip_path: false
+      auth:
+        required: false
+      rate_limit:
+        requests_per_second: 5
+        burst: 10
+
+    - path_prefix: "/api/auth/refresh"
+      target_name: "auth-api"
+      methods: ["POST"]
+      strip_path: false
+      auth:
+        required: false
+      rate_limit:
+        requests_per_second: 10
+        burst: 20
+
     # Organization (frontend calls /api/organization, backend expects /organization)
     - path_prefix: "/api/organization"
       target_name: "client-api"
