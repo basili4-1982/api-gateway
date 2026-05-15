@@ -32,6 +32,19 @@ jobs:
             ghcr.io/basili4-1982/api-gateway:${{ github.sha }}
             ghcr.io/basili4-1982/api-gateway:latest
 
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p ${{ secrets.DEPLOY_PORT }} ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Copy gateway config to server
+        run: |
+          scp -i ~/.ssh/deploy_key -P ${{ secrets.DEPLOY_PORT }} \
+            config.yaml \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/new-cml/configs/gateway.yaml
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         with:
@@ -44,6 +57,12 @@ jobs:
             cd /opt/new-cml
             export IMAGE_TAG=${{ github.sha }}
             sed -i "s|image: ghcr.io/basili4-1982/api-gateway:.*|image: ghcr.io/basili4-1982/api-gateway:${IMAGE_TAG}|" docker-compose.prod.yml
+            # Прописываем volume для конфига, если ещё нет
+            if ! grep -q 'configs/gateway.yaml' docker-compose.prod.yml; then
+              sed -i '/api-gateway:/,/volumes:/{
+                /volumes:/a\      - ./configs/gateway.yaml:/etc/proxy/config.yaml:ro
+              }' docker-compose.prod.yml
+            fi
             docker compose pull api-gateway
             docker compose up -d --force-recreate api-gateway
             docker image prune -f || true
