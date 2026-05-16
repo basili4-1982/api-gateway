@@ -250,14 +250,20 @@ jwt:
   claim_mappings:
     - "id"
     - "email"
+    - "full_name"
+    - "department_id"
     - "roles"
+    - "permissions"
 
 headers:
   strip_authorization: true         # по умолчанию JWT не передаётся бэкендам
   claim_to_header:
     id: "X-User-ID"
     email: "X-User-Email"
+    full_name: "X-User-FullName"
+    department_id: "X-User-DepartmentID"
     roles: "X-User-Roles"
+    permissions: "X-User-Permissions"
   add_headers:
     X-Gateway-Version: "1.0.0"
     X-Gateway-Name: "API-Gateway"
