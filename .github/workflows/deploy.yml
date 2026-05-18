@@ -39,11 +39,17 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -p ${{ secrets.DEPLOY_PORT }} ${{ secrets.DEPLOY_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Copy gateway config to server
+      - name: Copy gateway config to server (first deploy only)
         run: |
-          scp -i ~/.ssh/deploy_key -P ${{ secrets.DEPLOY_PORT }} \
+          ssh -i ~/.ssh/deploy_key -p ${{ secrets.DEPLOY_PORT }} -o StrictHostKeyChecking=no \
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} "
+            mkdir -p /opt/new-cml/configs
+            if [ ! -f /opt/new-cml/configs/gateway.yaml ]; then
+              exit 0
+            fi
+          " && scp -i ~/.ssh/deploy_key -P ${{ secrets.DEPLOY_PORT }} \
             config.yaml \
-            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/new-cml/configs/gateway.yaml
+            ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/opt/new-cml/configs/gateway.yaml || true
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
