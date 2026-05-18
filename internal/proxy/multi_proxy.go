@@ -269,13 +269,9 @@ func (mp *MultiProxy) createTargetProxy(targetCfg *config.TargetConfig) (*Target
 		},
 	}
 
-	if mp.config.Load().HealthCheck {
-		healthURL := targetCfg.HealthCheck
-		if healthURL == "" {
-			healthURL = targetCfg.URL
-		}
+	if targetCfg.HealthCheck != "" && mp.config.Load().HealthCheck {
 		tp.healthCheck = &HealthChecker{
-			url:     healthURL,
+			url:     targetCfg.HealthCheck,
 			period:  30 * time.Second,
 			timeout: 5 * time.Second,
 			stopCh:  make(chan struct{}),
