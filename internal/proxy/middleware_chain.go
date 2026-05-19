@@ -246,7 +246,7 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 		targetProxy, exists := mp.targets[target.Name]
 		mp.mu.RUnlock()
 
-		if !exists || !targetProxy.isHealthy() {
+		if !exists || !targetProxy.isHealthy(mp.config.Load().App.CircuitBreaker) {
 			mp.setCORSHeaders(rw.Header(), r)
 			http.Error(rw, "Target unavailable", http.StatusServiceUnavailable)
 			mp.metrics.IncRequests(r.Method, r.URL.Path, "503")
