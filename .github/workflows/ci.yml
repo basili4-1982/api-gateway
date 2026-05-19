@@ -26,7 +26,9 @@ jobs:
           args: --out-format json --issues-exit-code 0
 
       - name: Create/update lint issue
-        run: scripts/lint-to-issues.sh
+        run: |
+          type gh &>/dev/null || sudo apt-get install -y -qq gh
+          scripts/lint-to-issues.sh
 
       - name: Fail on lint errors
         if: steps.lint.outcome != 'success'
