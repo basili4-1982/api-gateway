@@ -6,7 +6,7 @@ server:
 
 application:
   env: "dev"          # dev/prod
-  health_check: true
+  health_check: false
 
 # TLS с автоматическими сертификатами Let's Encrypt
 # Раскомментируйте для продакшена:
