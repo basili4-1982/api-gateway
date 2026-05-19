@@ -500,10 +500,24 @@ func (mp *MultiProxy) proxyRequest(w http.ResponseWriter, r *http.Request, targe
 	w.WriteHeader(resp.StatusCode)
 
 	// Стримим тело ответа (без полной буферизации в память)
-	bytesWritten, err := io.Copy(w, resp.Body)
-	if err != nil {
-		mp.logger.Error("Failed to stream response body",
-			zap.Error(err),
+	// Читаем тело полностью для отладки
+	bodyBytes, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		mp.logger.Error("Failed to read response body",
+			zap.Error(readErr),
+			zap.String("target", target.config.Name),
+		)
+		http.Error(w, readErr.Error(), http.StatusBadGateway)
+		return
+	}
+	mp.logger.Debug("Response body read",
+		zap.String("target", target.config.Name),
+		zap.Int("body_len", len(bodyBytes)),
+	)
+	bytesWritten, writeErr := w.Write(bodyBytes)
+	if writeErr != nil {
+		mp.logger.Error("Failed to write response body",
+			zap.Error(writeErr),
 			zap.String("target", target.config.Name),
 		)
 		return
@@ -512,7 +526,7 @@ func (mp *MultiProxy) proxyRequest(w http.ResponseWriter, r *http.Request, targe
 	mp.logger.Debug("Response sent to client",
 		zap.String("target", target.config.Name),
 		zap.Int("status", resp.StatusCode),
-		zap.Int64("bytes_written", bytesWritten),
+		zap.Int("bytes_written", bytesWritten),
 	)
 }
 
