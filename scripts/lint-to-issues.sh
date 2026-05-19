@@ -19,6 +19,9 @@ fi
 REPO_OWNER="${GITHUB_REPOSITORY_OWNER:-X-didgital}"
 [[ -z "$REPO_NAME" ]] && { echo "ERROR: cannot detect repo name"; exit 1; }
 
+HEAD_SHA=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+KNOWN_ISSUE_TITLE_PREFIX="lint(${REPO_NAME})"
+
 LINT_REPORT="lint-report.json"
 if [ ! -f "$LINT_REPORT" ]; then
   BODY="## Репозиторий: $REPO_NAME
@@ -46,9 +49,7 @@ if [ ! -f "$LINT_REPORT" ]; then
 fi
 
 ERROR_COUNT=$(jq '.Issues | length' "$LINT_REPORT" 2>/dev/null || echo 0)
-HEAD_SHA=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
 
-KNOWN_ISSUE_TITLE_PREFIX="lint(${REPO_NAME})"
 
 close_existing_issue() {
   local search="$KNOWN_ISSUE_TITLE_PREFIX"
