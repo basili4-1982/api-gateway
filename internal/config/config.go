@@ -51,6 +51,7 @@ type StaticConfig struct {
 type App struct {
 	Env               string   `yaml:"env"`
 	HealthCheck       bool     `yaml:"health_check"`
+	CircuitBreaker    bool     `yaml:"circuit_breaker"`
 	MetricsAllowedIPs []string `yaml:"metrics_allowed_ips"`
 }
 
