@@ -482,6 +482,13 @@ func (mp *MultiProxy) proxyRequest(w http.ResponseWriter, r *http.Request, targe
 		}
 	}
 
+	// Удаляем заголовки, которые Go http.Transport уже обработал
+	// (автоматическая декомпрессия тела удаляет Content-Encoding и
+	//  корректирует Content-Length, но оригинальные заголовки могут
+	//  остаться и конфликтовать с уже декомпрессированным телом)
+	w.Header().Del("Content-Encoding")
+	w.Header().Del("Transfer-Encoding")
+
 	// Добавляем CORS заголовки
 	mp.setCORSHeaders(w.Header(), r)
 
