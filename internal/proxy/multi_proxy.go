@@ -561,7 +561,7 @@ func (mp *MultiProxy) logAccess(reqID, traceID string, r *http.Request, statusCo
 }
 
 // isHealthy возвращает статус здоровья таргета (учитывая circuit breaker)
-func (tp *TargetProxy) isHealthy() bool {
+func (tp *TargetProxy) isHealthy(cbEnabled bool) bool {
 	tp.mu.RLock()
 	defer tp.mu.RUnlock()
 
@@ -569,19 +569,21 @@ func (tp *TargetProxy) isHealthy() bool {
 		return false
 	}
 
+	if !cbEnabled {
+		return true
+	}
+
 	switch tp.cbState {
 	case stateClosed:
 		return true
 	case stateOpen:
 		if time.Since(tp.cbLastFailure) > tp.cbTimeout {
-			// Переходим в half-open. Сбрасываем probe flag — первый запрос попробуем пропустить
 			tp.cbState = stateHalfOpen
 			tp.halfOpenProbe.Store(true)
 			return true
 		}
 		return false
 	case stateHalfOpen:
-		// Пропускаем ровно один запрос
 		return tp.halfOpenProbe.CompareAndSwap(true, false)
 	}
 	return true
