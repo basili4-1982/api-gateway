@@ -6,7 +6,7 @@ server:
 
 application:
   env: "prod"
-  health_check: true
+  health_check: false
 
 jwt:
   required: false
