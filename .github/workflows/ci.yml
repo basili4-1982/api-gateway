@@ -1,0 +1,42 @@
+name: Lint and Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: latest
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Govulncheck
+        uses: kmulvey/govulncheck-action@v1.5.0
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Go test
+        run: go test ./... -count=1
