@@ -21,10 +21,28 @@ REPO_OWNER="${GITHUB_REPOSITORY_OWNER:-X-didgital}"
 
 LINT_REPORT="lint-report.json"
 if [ ! -f "$LINT_REPORT" ]; then
-  LINT_REPORT_TMP=$(mktemp)
-  trap 'rm -f "$LINT_REPORT_TMP"' EXIT
-  golangci-lint run ./... --output.json.path="$LINT_REPORT_TMP" 2>/dev/null || true
-  LINT_REPORT="$LINT_REPORT_TMP"
+  BODY="## Репозиторий: $REPO_NAME
+## SHA: $HEAD_SHA
+
+**golangci-lint не смог запуститься или не создал отчёт.**
+
+Возможные причины:
+- Проблема с Go модулями (tar errors на runner)
+- Недостаточно памяти
+- Конфиг линтера повреждён
+
+Проверьте логи CI: https://github.com/$REPO_OWNER/$REPO_NAME/actions
+
+Статус: инфраструктурная проблема, не код."
+  ISSUE_TITLE="${KNOWN_ISSUE_TITLE_PREFIX}: golangci-lint failed to run (infra)"
+
+  EXISTING=$(gh issue list -R "$REPO_OWNER/$REPO_NAME" --state open --json number,title --jq ".[] | select(.title | startswith(\"$KNOWN_ISSUE_TITLE_PREFIX\")) | .number" 2>/dev/null | head -1)
+  if [[ -n "$EXISTING" ]]; then
+    gh issue edit "$EXISTING" -R "$REPO_OWNER/$REPO_NAME" --title "$ISSUE_TITLE" --body "$BODY" 2>/dev/null || true
+  else
+    gh issue create -R "$REPO_OWNER/$REPO_NAME" --title "$ISSUE_TITLE" --body "$BODY" 2>/dev/null || true
+  fi
+  exit 0
 fi
 
 ERROR_COUNT=$(jq '.Issues | length' "$LINT_REPORT" 2>/dev/null || echo 0)
