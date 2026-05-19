@@ -39,3 +39,13 @@ docker-build:
 
 docker-buildx:
 	docker buildx build --platform linux/amd64 -t $(BINARY) .
+
+lint-ci:
+	golangci-lint run ./... --out-format json > lint-report.json
+	scripts/lint-to-issues.sh
+	test ! -s lint-report.json
+
+install-hooks:
+	cp .githooks/pre-push .git/hooks/pre-push
+	chmod +x .git/hooks/pre-push
+	@echo "✅ Pre-push hook installed"
