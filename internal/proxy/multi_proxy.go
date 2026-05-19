@@ -435,6 +435,11 @@ func (mp *MultiProxy) proxyRequest(w http.ResponseWriter, r *http.Request, targe
 	// Копируем заголовки
 	proxyReq.Header = r.Header.Clone()
 
+	// Remove Accept-Encoding to prevent Go transport from auto-decompressing.
+	// Otherwise Go strips Content-Encoding from response but keeps compressed body,
+	// browser gets gzip bytes without Content-Encoding header -> SyntaxError -> white screen.
+	proxyReq.Header.Del("Accept-Encoding")
+
 	// Выполняем запрос
 	mp.logger.Info("Sending request to target",
 		zap.String("target", target.config.Name),
