@@ -29,9 +29,6 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 # Копируем бинарник
 COPY --from=builder /build/api-gateway /app/api-gateway
 
-# Копируем дефолтный конфиг (переопределяется volume mount на stage)
-COPY config.stage.yaml /etc/proxy/config.yaml
-
 WORKDIR /app
 
 CMD ["/app/api-gateway"]
