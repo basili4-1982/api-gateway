@@ -23,6 +23,7 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
+          skip-cache: true
           args: --out-format json --issues-exit-code 0
 
       - name: Create/update lint issue
