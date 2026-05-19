@@ -17,14 +17,12 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: golangci-lint + issue
+      - name: golangci-lint
         id: lint
         continue-on-error: true
-        uses: golangci/golangci-lint-action@v7
-        with:
-          version: v2.12.2
-          skip-cache: true
-          args: --out-format json --issues-exit-code 0
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@v2.12.2
+          golangci-lint run ./... --output.json.path=lint-report.json --issues-exit-code 0
 
       - name: Create/update lint issue
         run: |
