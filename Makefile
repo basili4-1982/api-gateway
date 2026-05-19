@@ -41,7 +41,7 @@ docker-buildx:
 	docker buildx build --platform linux/amd64 -t $(BINARY) .
 
 lint-ci:
-	golangci-lint run ./... --out-format json > lint-report.json
+	golangci-lint run ./... --output.json.path=lint-report.json
 	scripts/lint-to-issues.sh
 	test ! -s lint-report.json
 
