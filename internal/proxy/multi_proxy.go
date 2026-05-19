@@ -489,6 +489,10 @@ func (mp *MultiProxy) proxyRequest(w http.ResponseWriter, r *http.Request, targe
 	w.Header().Del("Content-Encoding")
 	w.Header().Del("Transfer-Encoding")
 
+	// Content-Length после декомпрессии может не совпадать —
+	// удаляем, чтобы клиент использовал chunked transfer
+	w.Header().Del("Content-Length")
+
 	// Добавляем CORS заголовки
 	mp.setCORSHeaders(w.Header(), r)
 
