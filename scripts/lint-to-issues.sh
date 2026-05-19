@@ -15,10 +15,13 @@ if [[ -z "$REPO_NAME" ]]; then
 fi
 [[ -z "$REPO_NAME" ]] && { echo "ERROR: cannot detect repo name"; exit 1; }
 
-LINT_REPORT=$(mktemp)
-trap 'rm -f "$LINT_REPORT"' EXIT
-
-golangci-lint run ./... --out-format json > "$LINT_REPORT" 2>/dev/null || true
+LINT_REPORT="lint-report.json"
+if [ ! -f "$LINT_REPORT" ]; then
+  LINT_REPORT_TMP=$(mktemp)
+  trap 'rm -f "$LINT_REPORT_TMP"' EXIT
+  golangci-lint run ./... --output.json.path="$LINT_REPORT_TMP" 2>/dev/null || true
+  LINT_REPORT="$LINT_REPORT_TMP"
+fi
 
 ERROR_COUNT=$(jq '.Issues | length' "$LINT_REPORT" 2>/dev/null || echo 0)
 HEAD_SHA=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
