@@ -451,7 +451,9 @@ func (mp *MultiProxy) proxyRequest(w http.ResponseWriter, r *http.Request, targe
 
 	resp, err := target.client.Do(proxyReq)
 	if err != nil {
-		target.recordCall(err)
+		if mp.config.Load().App.CircuitBreaker {
+			target.recordCall(err)
+		}
 		mp.setCORSHeaders(w.Header(), r)
 		mp.logger.Error("Proxy request failed",
 			zap.Error(err),
@@ -473,11 +475,12 @@ func (mp *MultiProxy) proxyRequest(w http.ResponseWriter, r *http.Request, targe
 		zap.Int("status", resp.StatusCode),
 	)
 
-	// Circuit breaker: 5xx считается ошибкой
-	if resp.StatusCode >= 500 {
-		target.recordCall(fmt.Errorf("upstream %d", resp.StatusCode))
-	} else {
-		target.recordCall(nil)
+	if mp.config.Load().App.CircuitBreaker {
+		if resp.StatusCode >= 500 {
+			target.recordCall(fmt.Errorf("upstream %d", resp.StatusCode))
+		} else {
+			target.recordCall(nil)
+		}
 	}
 
 	// Копируем заголовки ответа от бэкенда
