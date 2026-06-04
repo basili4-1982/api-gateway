@@ -145,7 +145,7 @@ func NewMultiProxy(cfg *config.Config, logger *zap.Logger) (*MultiProxy, error) 
 	handler = spaStaticMiddleware(mp)(handler)
 	handler = globalRateLimitMiddleware(mp.globalLimiter, mp.metrics)(handler)
 	handler = metricsEndpointMiddleware(mp.metrics, cfg.MetricsAllowedIPs)(handler)
-	handler = healthProbeMiddleware()(handler)
+	handler = mp.healthHandler()
 	handler = activeRequestMetricsMiddleware(mp.metrics)(handler)
 	handler = tracingMiddleware(mp.tracerProvider)(handler)
 	handler = requestIDMiddleware()(handler)
@@ -826,7 +826,7 @@ func (mp *MultiProxy) logTargets() {
 func (mp *MultiProxy) httpRedirectHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" || r.URL.Path == "/ready" {
-			w.WriteHeader(http.StatusOK)
+			mp.healthHandler().ServeHTTP(w, r)
 			return
 		}
 		cfg := mp.config.Load()
