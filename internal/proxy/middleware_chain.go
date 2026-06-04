@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -136,68 +135,6 @@ var (
 	BuildTime  string
 	BuildRunID string
 )
-
-func (mp *MultiProxy) healthHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Отвечаем только на внутренние запросы (localhost / docker-сеть)
-		remoteIP := r.RemoteAddr
-		isInternal := false
-		for _, prefix := range []string{"127.0.0.1", "::1", "172.", "10.", "192.168."} {
-			if strings.HasPrefix(remoteIP, prefix) || strings.HasPrefix(r.Header.Get("X-Forwarded-For"), prefix) {
-				isInternal = true
-				break
-			}
-		}
-		if !isInternal {
-			// Внешние запросы пускаем дальше — к бэкенду
-			mp.ServeHTTP(w, r)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-
-		overallStatus := "ok"
-
-		type targetHealth struct {
-			Status string `json:"status"`
-			Error  string `json:"error,omitempty"`
-		}
-		services := make(map[string]targetHealth)
-
-		mp.mu.RLock()
-		for name, target := range mp.targets {
-			target.mu.RLock()
-			h := target.healthy
-			target.mu.RUnlock()
-			th := targetHealth{Status: "ok"}
-			if !h {
-				th.Status = "degraded"
-				th.Error = "health check failed"
-				overallStatus = "degraded"
-			}
-			services[name] = th
-		}
-		mp.mu.RUnlock()
-
-		resp := map[string]any{
-			"status":   overallStatus,
-			"services": services,
-			"build": map[string]any{
-				"git_sha":      GitSHA,
-				"build_time":   BuildTime,
-				"build_run_id": BuildRunID,
-			},
-		}
-
-		body, _ := json.Marshal(resp)
-		httpCode := http.StatusOK
-		if overallStatus != "ok" {
-			httpCode = http.StatusServiceUnavailable
-		}
-		w.WriteHeader(httpCode)
-		w.Write(body)
-	})
-}
 
 // ──────── Metrics endpoint ────────
 
