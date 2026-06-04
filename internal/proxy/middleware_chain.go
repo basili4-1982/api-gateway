@@ -139,6 +139,21 @@ var (
 
 func (mp *MultiProxy) healthHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Отвечаем только на внутренние запросы (localhost / docker-сеть)
+		remoteIP := r.RemoteAddr
+		isInternal := false
+		for _, prefix := range []string{"127.0.0.1", "::1", "172.", "10.", "192.168."} {
+			if strings.HasPrefix(remoteIP, prefix) || strings.HasPrefix(r.Header.Get("X-Forwarded-For"), prefix) {
+				isInternal = true
+				break
+			}
+		}
+		if !isInternal {
+			// Внешние запросы пускаем дальше — к бэкенду
+			mp.ServeHTTP(w, r)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 
 		overallStatus := "ok"
