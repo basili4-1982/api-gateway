@@ -1,8 +1,10 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -24,6 +26,7 @@ const (
 	ctxKeyRule          contextKey = "rule"
 	ctxKeyRemainingPath contextKey = "remaining_path"
 	ctxKeyTargetProxy   contextKey = "target_proxy"
+	ctxKeyRequestBody   contextKey = "request_body"
 )
 
 // ──────── Panic Recovery ────────
@@ -276,6 +279,16 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 			mp.metrics.IncRequests(r.Method, r.URL.Path, "401")
 			mp.logAccess(reqID, traceID, r, 401, 0, target)
 			return
+		}
+
+		// Читаем тело запроса для передачи в аудит
+		if r.Body != nil && (r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH") {
+			bodyBytes, _ := io.ReadAll(r.Body)
+			r.Body.Close()
+			if len(bodyBytes) > 0 && len(bodyBytes) < 65536 {
+				r = r.WithContext(context.WithValue(r.Context(), ctxKeyRequestBody, bodyBytes))
+			}
+			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		}
 
 		// Publish on_request webhooks
