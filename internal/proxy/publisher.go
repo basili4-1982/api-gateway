@@ -24,6 +24,7 @@ type AuditEvent struct {
 	StatusCode  int               `json:"status_code,omitempty"`
 	Timestamp   time.Time         `json:"timestamp"`
 	Headers     map[string]string `json:"headers,omitempty"`
+	Changes     json.RawMessage   `json:"changes,omitempty"`
 }
 
 type Publisher struct {
@@ -134,6 +135,14 @@ func (p *Publisher) buildEvent(r *http.Request, statusCode int) AuditEvent {
 	}
 	if roles := r.Header.Get("X-User-Roles"); roles != "" {
 		e.UserRoles = roles
+	}
+
+	if bodyBytes, ok := r.Context().Value(ctxKeyRequestBody).([]byte); ok && len(bodyBytes) > 0 {
+		var parsed map[string]interface{}
+		if err := json.Unmarshal(bodyBytes, &parsed); err == nil && len(parsed) > 0 {
+			raw, _ := json.Marshal(parsed)
+			e.Changes = raw
+		}
 	}
 
 	return e
