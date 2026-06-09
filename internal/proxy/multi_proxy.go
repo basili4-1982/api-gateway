@@ -84,6 +84,7 @@ type MultiProxy struct {
 	handler              http.Handler
 	tracerProvider       *TracerProvider
 	permissionsManager   *permissions.Manager
+	publisher            *Publisher
 }
 
 // HealthChecker проверяет здоровье таргета
@@ -165,6 +166,18 @@ func NewMultiProxy(cfg *config.Config, logger *zap.Logger) (*MultiProxy, error) 
 			zap.Duration("cache_ttl", cfg.Permissions.CacheTTL),
 		)
 	}
+
+	if len(cfg.Webhooks) > 0 {
+		publisher, err := NewPublisher(cfg, logger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create publisher: %w", err)
+		}
+		mp.publisher = publisher
+		logger.Info("Webhook publisher enabled",
+			zap.Int("webhooks", len(cfg.Webhooks)),
+		)
+	}
+
 	mp.handler = handler
 
 	return mp, nil
@@ -776,6 +789,10 @@ func (mp *MultiProxy) Stop(ctx context.Context) error {
 
 	if err := mp.tracerProvider.Shutdown(ctx); err != nil {
 		mp.logger.Error("Tracer provider shutdown error", zap.Error(err))
+	}
+
+	if mp.publisher != nil {
+		mp.publisher.Close()
 	}
 
 	return nil

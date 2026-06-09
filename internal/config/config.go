@@ -20,8 +20,9 @@ type Config struct {
 	BasicAuth BasicAuthConfig `yaml:"basic_auth"`
 	Logging   LoggingConfig   `yaml:"logging"`
 	Headers   HeadersConfig   `yaml:"headers"`
-	Routing   RoutingConfig      `yaml:"routing"`
+	Routing    RoutingConfig      `yaml:"routing"`
 	Permissions PermissionsConfig `yaml:"permissions"`
+	Webhooks   []WebhookConfig   `yaml:"webhooks"`
 }
 
 // TLSConfig конфигурация TLS с автосертификатами (Let's Encrypt)
@@ -153,6 +154,36 @@ type HeadersConfig struct {
 	ClaimToHeader      map[string]string `yaml:"claim_to_header"`
 	AddHeaders         map[string]string `yaml:"add_headers"`
 	CORS               *CORSConfig       `yaml:"cors,omitempty"`
+}
+
+// WebhookTrigger тип триггера для вебхука
+type WebhookTrigger string
+
+const (
+	TriggerOnRequest  WebhookTrigger = "on_request"
+	TriggerOnResponse WebhookTrigger = "on_response"
+)
+
+// WebhookTransport тип транспорта для вебхука
+type WebhookTransport string
+
+const (
+	TransportNATS    WebhookTransport = "nats"
+	TransportWebhook WebhookTransport = "webhook"
+)
+
+// WebhookConfig конфигурация вебхука/NATS публикации событий
+type WebhookConfig struct {
+	Name        string           `yaml:"name"`
+	Transport   WebhookTransport `yaml:"transport"`
+	NATSURL     string           `yaml:"nats_url"`
+	Subject     string           `yaml:"subject"`
+	WebhookURL  string           `yaml:"webhook_url"`
+	Trigger     WebhookTrigger   `yaml:"trigger"`
+	Methods     []string         `yaml:"methods"`
+	OnStatusCodes []int          `yaml:"on_status_codes"`
+	ExcludePaths []string        `yaml:"exclude_paths"`
+	Async       bool             `yaml:"async"`
 }
 
 // LoggingConfig конфигурация логирования
@@ -331,6 +362,27 @@ func (c *Config) validate() error {
 
 	if c.Permissions.Enabled && c.Permissions.ServiceURL == "" {
 		return fmt.Errorf("permissions.service_url is required when permissions.enabled is true")
+	}
+
+	for _, wh := range c.Webhooks {
+		if wh.Name == "" {
+			return fmt.Errorf("webhook name is required")
+		}
+		if wh.Transport == "" {
+			return fmt.Errorf("webhook %s: transport is required", wh.Name)
+		}
+		if wh.Transport == TransportNATS && wh.NATSURL == "" {
+			return fmt.Errorf("webhook %s: nats_url is required for nats transport", wh.Name)
+		}
+		if wh.Transport == TransportNATS && wh.Subject == "" {
+			return fmt.Errorf("webhook %s: subject is required for nats transport", wh.Name)
+		}
+		if wh.Transport == TransportWebhook && wh.WebhookURL == "" {
+			return fmt.Errorf("webhook %s: webhook_url is required for webhook transport", wh.Name)
+		}
+		if wh.Trigger == "" {
+			return fmt.Errorf("webhook %s: trigger is required (on_request|on_response)", wh.Name)
+		}
 	}
 
 	return nil
