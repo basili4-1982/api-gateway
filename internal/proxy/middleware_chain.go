@@ -278,6 +278,11 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 			return
 		}
 
+		// Publish on_request webhooks
+		if mp.publisher != nil {
+			mp.publisher.PublishOnRequest(r.Context(), r)
+		}
+
 		mp.logger.Debug("Proxying request",
 			zap.String("request_id", reqID),
 			zap.String("method", r.Method),
@@ -290,6 +295,11 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 
 		mp.metrics.IncRequests(r.Method, r.URL.Path, fmt.Sprintf("%d", rw.statusCode))
 		mp.metrics.ObserveDuration(r.Method, r.URL.Path, time.Since(startTime))
+
+		// Publish on_response webhooks
+		if mp.publisher != nil {
+			mp.publisher.PublishOnResponse(r.Context(), r, rw.statusCode)
+		}
 
 		mp.logAccess(reqID, traceID, r, rw.statusCode, time.Since(startTime), target)
 	})
