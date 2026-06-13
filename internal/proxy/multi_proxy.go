@@ -3,6 +3,9 @@ package proxy
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -329,6 +332,21 @@ func (mp *MultiProxy) modifyRequest(r *http.Request, targetCfg *config.TargetCon
 			for claimName, headerName := range mp.config.Load().Headers.ClaimToHeader {
 				if val, ok := extracted[claimName]; ok {
 					r.Header.Set(headerName, fmt.Sprintf("%v", val))
+				}
+			}
+
+			// X-User-Signature: HMAC(user_id, api_secret) для верификации между сервисами
+			signHeader := mp.config.Load().Headers.SignHeader
+			if signHeader != "" {
+				if userIDVal, ok := extracted["id"]; ok {
+					userIDStr := fmt.Sprintf("%v", userIDVal)
+					secret := mp.config.Load().Permissions.APIKey
+					if secret != "" {
+						mac := hmac.New(sha256.New, []byte(secret))
+						mac.Write([]byte(userIDStr))
+						sig := hex.EncodeToString(mac.Sum(nil))
+						r.Header.Set(signHeader, sig)
+					}
 				}
 			}
 
