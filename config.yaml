@@ -268,6 +268,8 @@ headers:
   add_headers:
     X-Gateway-Version: "1.0.0"
     X-Gateway-Name: "API-Gateway"
+    X-API-Key: "${API_KEY:-change-me}"
+    X-User-Signature: ""
 
 logging:
   level: "debug"

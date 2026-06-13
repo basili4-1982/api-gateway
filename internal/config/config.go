@@ -153,6 +153,7 @@ type HeadersConfig struct {
 	ForwardHeaders     bool              `yaml:"forward_headers"`
 	ClaimToHeader      map[string]string `yaml:"claim_to_header"`
 	AddHeaders         map[string]string `yaml:"add_headers"`
+	SignHeader         string            `yaml:"sign_header"`
 	CORS               *CORSConfig       `yaml:"cors,omitempty"`
 }
 
