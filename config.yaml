@@ -58,6 +58,13 @@ targets:
     strip_prefix: false
     health_check: "http://fgis-writer:8083/health"
 
+  - name: "passport-service"
+    url: "http://passport-service:8085"
+    timeout: 10s
+    path_prefix: "/"
+    strip_prefix: false
+    health_check: "http://passport-service:8085/health"
+
   - name: "xlsx-generator"
     url: "http://xlsx-generator:8080"
     timeout: 30s
@@ -144,6 +151,27 @@ routing:
       rate_limit:
         requests_per_second: 10
         burst: 20
+
+    # Passport-service endpoints (auth через Go passport)
+    - path_prefix: "/api/auth/me"
+      target_name: "passport-service"
+      methods: ["GET"]
+      strip_path: false
+      auth:
+        required: true
+      rate_limit:
+        requests_per_second: 30
+        burst: 50
+
+    - path_prefix: "/api/auth/logout"
+      target_name: "passport-service"
+      methods: ["POST"]
+      strip_path: false
+      auth:
+        required: true
+      rate_limit:
+        requests_per_second: 20
+        burst: 40
 
     # Organization (frontend calls /api/organization, backend expects /organization)
     - path_prefix: "/api/organization"
