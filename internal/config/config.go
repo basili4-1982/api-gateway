@@ -358,7 +358,7 @@ func (c *Config) validate() error {
 		c.Permissions.HeaderName = "X-User-Permissions"
 	}
 	if c.Permissions.InvalidateToken == "" {
-		c.Permissions.InvalidateToken = "change-me"
+		return fmt.Errorf("permissions.invalidate_token is required when permissions are configured")
 	}
 
 	if c.Permissions.Enabled && c.Permissions.ServiceURL == "" {
@@ -391,9 +391,9 @@ func (c *Config) validate() error {
 
 // GetTargetByName возвращает таргет по имени
 func (c *Config) GetTargetByName(name string) *TargetConfig {
-	for _, target := range c.Targets {
-		if target.Name == name {
-			return &target
+	for i := range c.Targets {
+		if c.Targets[i].Name == name {
+			return &c.Targets[i]
 		}
 	}
 	return nil
