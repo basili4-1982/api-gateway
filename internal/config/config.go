@@ -357,8 +357,8 @@ func (c *Config) validate() error {
 	if c.Permissions.HeaderName == "" {
 		c.Permissions.HeaderName = "X-User-Permissions"
 	}
-	if c.Permissions.InvalidateToken == "" {
-		return fmt.Errorf("permissions.invalidate_token is required when permissions are configured")
+	if c.Permissions.InvalidateToken == "" && c.Permissions.APIKey != "" {
+		c.Permissions.InvalidateToken = c.Permissions.APIKey
 	}
 
 	if c.Permissions.Enabled && c.Permissions.ServiceURL == "" {
