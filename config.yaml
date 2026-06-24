@@ -1,304 +1,336 @@
 server:
-  port: 8080
+  port: 80
   read_timeout: 5s
-  write_timeout: 10s
+  write_timeout: 30s
   idle_timeout: 120s
 
 application:
-  env: "dev"          # dev/prod
+  env: "prod"
   health_check: false
+  circuit_breaker: false
 
-# TLS с автоматическими сертификатами Let's Encrypt
-# Раскомментируйте для продакшена:
-# tls:
-#   enabled: true
-#   port: 443
-#   http_port: 80
-#   domains:
-#     - "api.example.com"
-#   email: "admin@example.com"
-#   cache_dir: "/var/lib/api-gateway/certs"
-#   staging: false
-#   redirect_http: true
-
-# Целевые сервисы (микросервисы)
-targets:
-  - name: "auth-api"
-    url: "http://auth-api:9001"
-    timeout: 10s
-    path_prefix: "/api/v1/auth"
-    strip_prefix: false
-    health_check: "http://auth-api:9001/health"
-
-  - name: "client-api"
-    url: "http://client-api:9002"
-    timeout: 30s
-    path_prefix: "/api/v1/client"
-    strip_prefix: false
-    health_check: "http://client-api:9002/health"
-
-  - name: "admin-api"
-    url: "http://admin-api:9003"
-    timeout: 30s
-    path_prefix: "/api/v1/admin"
-    strip_prefix: false
-    health_check: "http://admin-api:9003/health"
-
-  - name: "storage-api"
-    url: "http://storage-api:9004"
-    timeout: 60s
-    path_prefix: "/api/v1/storage"
-    strip_prefix: false
-    health_check: "http://storage-api:9004/health"
-
-  - name: "fgis-writer"
-    url: "http://fgis-writer:8083"
-    timeout: 10s
-    path_prefix: "/api/v1/fgis"
-    strip_prefix: false
-    health_check: "http://fgis-writer:8083/health"
-
-  - name: "passport-service"
-    url: "http://passport-service:8085"
-    timeout: 10s
-    path_prefix: "/"
-    strip_prefix: false
-    health_check: "http://passport-service:8085/health"
-
-  - name: "xlsx-generator"
-    url: "http://xlsx-generator:8080"
-    timeout: 30s
-    path_prefix: "/api/v1/reports"
-    strip_prefix: false
-    health_check: "http://xlsx-generator:8080/health"
-
-# Правила маршрутизации с per-route JWT и rate limiting
-routing:
-  rules:
-    # Публичные endpoint-ы (без JWT)
-    - path_prefix: "/api/v1/auth/login"
-      target_name: "auth-api"
-      methods: ["POST"]
-      strip_path: false
-      rate_limit:
-        requests_per_second: 10
-        burst: 20
-
-    - path_prefix: "/api/v1/auth/register"
-      target_name: "auth-api"
-      methods: ["POST"]
-      strip_path: false
-      rate_limit:
-        requests_per_second: 5
-        burst: 10
-
-    - path_prefix: "/api/v1/auth/refresh"
-      target_name: "auth-api"
-      methods: ["POST"]
-      strip_path: false
-      auth:
-        required: false   # явно разрешаем без токена
-      rate_limit:
-        requests_per_second: 10
-        burst: 20
-
-    - path_prefix: "/api/v1/auth"
-      target_name: "auth-api"
-      strip_path: false
-      auth:
-        required: true
-      rate_limit:
-        requests_per_second: 30
-        burst: 50
-
-    # Публичные auth-эндпоинты (без JWT)
-    - path_prefix: "/api/auth/methods"
-      target_name: "auth-api"
-      methods: ["GET"]
-      strip_path: false
-      auth:
-        required: false
-      rate_limit:
-        requests_per_second: 20
-        burst: 40
-
-    - path_prefix: "/api/auth/login"
-      target_name: "auth-api"
-      methods: ["POST"]
-      strip_path: false
-      auth:
-        required: false
-      rate_limit:
-        requests_per_second: 10
-        burst: 20
-
-    - path_prefix: "/api/auth/register"
-      target_name: "auth-api"
-      methods: ["POST"]
-      strip_path: false
-      auth:
-        required: false
-      rate_limit:
-        requests_per_second: 5
-        burst: 10
-
-    - path_prefix: "/api/auth/refresh"
-      target_name: "auth-api"
-      methods: ["POST"]
-      strip_path: false
-      auth:
-        required: false
-      rate_limit:
-        requests_per_second: 10
-        burst: 20
-
-    # Passport-service endpoints (auth через Go passport)
-    - path_prefix: "/api/auth/me"
-      target_name: "passport-service"
-      methods: ["GET"]
-      strip_path: false
-      auth:
-        required: true
-      rate_limit:
-        requests_per_second: 30
-        burst: 50
-
-    - path_prefix: "/api/auth/logout"
-      target_name: "passport-service"
-      methods: ["POST"]
-      strip_path: false
-      auth:
-        required: true
-      rate_limit:
-        requests_per_second: 20
-        burst: 40
-
-    # Organization (frontend calls /api/organization, backend expects /organization)
-    - path_prefix: "/api/organization"
-      target_name: "client-api"
-      strip_path: true
-      auth:
-        required: true
-        roles: ["user", "admin"]
-      rate_limit:
-        requests_per_second: 50
-        burst: 100
-
-    # Admin organization (frontend calls /api/admin/organization, backend expects /organization)
-    - path_prefix: "/api/admin/organization"
-      target_name: "admin-api"
-      strip_path: true
-      auth:
-        required: true
-        roles: ["admin"]
-        strip_token: false
-      rate_limit:
-        requests_per_second: 50
-        burst: 100
-
-    # Клиентский API (требует JWT, базовые роли)
-    - path_prefix: "/api/v1/client"
-      target_name: "client-api"
-      strip_path: false
-      auth:
-        required: true
-        roles: ["user", "admin"]
-      rate_limit:
-        requests_per_second: 100
-        burst: 200
-
-    # Административный API (только admin)
-    - path_prefix: "/api/v1/admin"
-      target_name: "admin-api"
-      strip_path: false
-      auth:
-        required: true
-        roles: ["admin"]
-        strip_token: false   # админский JWT пробрасывается дальше
-      rate_limit:
-        requests_per_second: 50
-        burst: 100
-
-    # Storage API (JWT опционально, можно загружать файлы)
-    - path_prefix: "/api/v1/storage/public"
-      target_name: "storage-api"
-      strip_path: false
-      auth:
-        required: false
-      rate_limit:
-        requests_per_second: 20
-        burst: 40
-
-    - path_prefix: "/api/v1/storage"
-      target_name: "storage-api"
-      strip_path: false
-      auth:
-        required: true
-      rate_limit:
-        requests_per_second: 30
-        burst: 50
-
-    # FGIS Writer API (справочник типов СИ, без JWT — публичный поиск)
-    - path_prefix: "/api/v1/fgis"
-      target_name: "fgis-writer"
-      strip_path: false
-      auth:
-        required: false
-      rate_limit:
-        requests_per_second: 50
-        burst: 100
-
-    # XLSX Generator (генерация отчётов, публичный download)
-    - path_prefix: "/api/v1/reports/download"
-      target_name: "xlsx-generator"
-      strip_path: false
-      auth:
-        required: false
-      rate_limit:
-        requests_per_second: 20
-        burst: 40
-
-    - path_prefix: "/api/v1/reports/generate"
-      target_name: "xlsx-generator"
-      strip_path: true
-      methods: ["POST"]
-      auth:
-        required: true
-      rate_limit:
-        requests_per_second: 5
-        burst: 10
+permissions:
+  api_key: "b8107b43dc1d1e8314041c6003d12fd28750b8e95185035101823abd19f95e3e"
 
 jwt:
-  secret_key: "change-me-to-a-secure-secret-at-least-256-bits-long"
-  algorithm: "HS256"
-  validate_exp: true
+  required: false
+  secret_key: "OFF5tQgiQzgq4TVjExUS5XtCgvYUPF0pbTlWT9XJDgJue6RCPLQ5xZ7GKGUlYE3F"
+  validate_exp: false
   validate_iss: false
   validate_aud: false
-  required: false                   # глобально JWT не обязателен, per-route управление
   claim_mappings:
     - "id"
     - "email"
-    - "full_name"
-    - "department_id"
     - "roles"
-    - "permissions"
+
+targets:
+  - name: "passport"
+    url: "http://passport-service:8085"
+    timeout: 10s
+    health_check: "http://passport-service:8085/health"
+
+  - name: "yii3-backend"
+    url: "http://yii3-backend:8081"
+    timeout: 30s
+    health_check: "http://yii3-backend:8081/health"
+
+  - name: "frontend"
+    url: "http://frontend:80"
+    timeout: 10s
+    health_check: "http://frontend:80/health"
+
+  - name: "admin-frontend"
+    url: "http://admin-front:80"
+    timeout: 10s
+    health_check: "http://admin-front:80/health"
+
+  - name: "fgis-syncer"
+    url: "http://fgis-syncer:8080"
+    timeout: 60s
+    health_check: "http://fgis-syncer:8080/health"
+
+  - name: "fgis-writer"
+    url: "http://fgis-writer:8083"
+    timeout: 30s
+    health_check: "http://fgis-writer:8083/health"
+
+  - name: "document-service"
+    url: "http://document-service:8070"
+    timeout: 30s
+    health_check: "http://document-service:8070/health"
+
+  - name: "monitoring-report-engine"
+    url: "http://monitoring-report-engine:8080"
+    timeout: 60s
+    health_check: "http://monitoring-report-engine:8080/health"
+
+  - name: "activity-service"
+    url: "http://activity-service:8071"
+    timeout: 30s
+    health_check: "http://activity-service:8071/health"
+
+  - name: "notification-service"
+    url: "http://notification-service:9090"
+    timeout: 30s
+    health_check: "http://notification-service:9090/health"
+
+  - name: "permission-service"
+    url: "http://permission-service:8084"
+    timeout: 10s
+    health_check: "http://permission-service:8084/health"
+
+  - name: "audit-consumer"
+    url: "http://audit-consumer:9190"
+    timeout: 10s
+    health_check: "http://audit-consumer:9190/health"
+
+  - name: "lifecycle-engine"
+    url: "http://lifecycle-engine:8080"
+    timeout: 10s
+    health_check: "http://lifecycle-engine:8080/healthz"
+
+routing:
+  rules:
+    - path_prefix: "/api/auth/methods"
+      target_name: "passport"
+      strip_path: false
+      auth:
+        required: false
+
+    - path_prefix: "/api/auth/login"
+      target_name: "passport"
+      strip_path: false
+      auth:
+        required: false
+
+    - path_prefix: "/api/auth/refresh"
+      target_name: "passport"
+      strip_path: false
+      auth:
+        required: false
+
+    - path_prefix: "/api/auth"
+      target_name: "passport"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/fgis"
+      target_name: "fgis-syncer"
+      strip_path: true
+      auth:
+        required: true
+
+    - path_prefix: "/api/admin/fgis"
+      target_name: "fgis-syncer"
+      strip_path: true
+      auth:
+        required: true
+
+    - path_prefix: "/api/reports"
+      target_name: "monitoring-report-engine"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/report-templates"
+      target_name: "monitoring-report-engine"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/report-runs"
+      target_name: "monitoring-report-engine"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/monitoring/aggregation"
+      target_name: "monitoring-report-engine"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/monitoring"
+      target_name: "monitoring-report-engine"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/admin/monitoring"
+      target_name: "monitoring-report-engine"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/admin/generate-import-mapping"
+      target_name: "monitoring-report-engine"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/admin/templates"
+      target_name: "monitoring-report-engine"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/forms"
+      target_name: "monitoring-report-engine"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/notifications/rules"
+      target_name: "notification-service"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/admin/notification-channels"
+      target_name: "notification-service"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/notifications/templates"
+      target_name: "notification-service"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/notifications/config"
+      target_name: "notification-service"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/admin/sessions"
+      target_name: "passport"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/admin/audit"
+      target_name: "yii3-backend"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/admin/roles"
+      target_name: "permission-service"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/admin/permissions"
+      target_name: "permission-service"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/documents"
+      target_name: "document-service"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/audit-log"
+      target_name: "audit-consumer"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/permissions"
+      target_name: "permission-service"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/admin/lifecycle"
+      target_name: "lifecycle-engine"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/workflow"
+      target_name: "lifecycle-engine"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/inbox"
+      target_name: "lifecycle-engine"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/files"
+      target_name: "document-service"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/activity"
+      target_name: "activity-service"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api"
+      target_name: "yii3-backend"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/admin"
+      target_name: "admin-frontend"
+      strip_path: true
+
+    - path_prefix: "/"
+      target_name: "frontend"
+      strip_path: false
 
 headers:
-  strip_authorization: true         # по умолчанию JWT не передаётся бэкендам
-  sign_header: "X-User-Signature"   # HMAC(user_id, api_secret) для верификации между сервисами
+  strip_authorization: false
+  sign_header: "X-User-Signature"
   claim_to_header:
     id: "X-User-ID"
     email: "X-User-Email"
-    full_name: "X-User-FullName"
-    department_id: "X-User-DepartmentID"
     roles: "X-User-Roles"
-    permissions: "X-User-Permissions"
   add_headers:
-    X-Gateway-Version: "1.0.0"
-    X-Gateway-Name: "API-Gateway"
-    X-API-Key: "${API_KEY:-change-me}"
-    X-User-Signature: ""
+    X-API-Key: "b8107b43dc1d1e8314041c6003d12fd28750b8e95185035101823abd19f95e3e"
+    X-User-Signature: "0d2fce0d2617662e56faf187869b57ca2e5bf33bf3f73076d4b6c286b391e091"
+  cors:
+    enabled: true
+    allowed_origins: ["*"]
+    allowed_methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
+    allowed_headers: ["Origin", "Content-Type", "Accept", "Authorization", "X-Request-ID", "X-User-ID", "X-User-Email", "X-User-Roles", "X-API-Key"]
+    expose_headers: ["X-User-ID", "X-User-Email", "X-User-Roles", "X-Proxy", "X-Request-ID", "Authorization", "Content-Disposition"]
+    max_age: 86400
+
+webhooks:
+  # Аудит мутирующих запросов — через NATS в audit-consumer
+  - name: "audit"
+    transport: nats
+    nats_url: "nats://nats:4222"
+    subject: "audit.events"
+    trigger: on_request
+    methods: ["POST", "PUT", "PATCH", "DELETE"]
+    exclude_paths: ["/health", "/ready", "/metrics"]
+    async: true
+
+  # ETL-события об изменениях данных — замена EtlService::publish()
+  - name: "resource-change"
+    transport: nats
+    nats_url: "nats://nats:4222"
+    subject: "cml.events"
+    trigger: on_response
+    methods: ["POST", "PUT", "PATCH", "DELETE"]
+    on_status_codes: [200, 201, 204]
+    exclude_paths: ["/health", "/ready", "/metrics"]
+    async: true
 
 logging:
-  level: "debug"
+  level: "info"
   format: "console"
