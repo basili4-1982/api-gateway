@@ -301,6 +301,14 @@ func (mp *MultiProxy) createTargetProxy(targetCfg *config.TargetConfig) (*Target
 func (mp *MultiProxy) modifyRequest(r *http.Request, targetCfg *config.TargetConfig, rule *config.RoutingRule) error {
 	authHeader := r.Header.Get("Authorization")
 
+	// если нет Authorization header — пробуем JWT из cookie
+	if authHeader == "" {
+		if c, err := r.Cookie("cml_access"); err == nil && c.Value != "" {
+			authHeader = "Bearer " + c.Value
+			r.Header.Set("Authorization", authHeader)
+		}
+	}
+
 	authRequired := mp.config.Load().JWT.Required
 	stripToken := mp.config.Load().Headers.StripAuthorization
 	if rule != nil && rule.Auth != nil {
