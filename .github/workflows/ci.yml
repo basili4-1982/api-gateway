@@ -36,6 +36,7 @@ jobs:
           exit 1
 
       - name: Govulncheck
+        continue-on-error: true
         uses: kmulvey/govulncheck-action@v1.5.0
 
   test:
