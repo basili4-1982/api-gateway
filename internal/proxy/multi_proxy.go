@@ -904,16 +904,12 @@ func (mp *MultiProxy) serveStatic(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func (mp *MultiProxy) serveSPA(w http.ResponseWriter, r *http.Request, app *config.StaticApp) {
-	fs := http.Dir(app.RootDir)
 	path := strings.TrimPrefix(r.URL.Path, app.PathPrefix)
 	if path == "" {
 		path = "/"
 	}
 
-	fullPath := app.RootDir + path
-	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-		path = "/" + app.IndexFile
-	}
+	path = mp.resolveStaticPath(path, app)
 
 	mp.logger.Debug("Serving static file",
 		zap.String("path", path),
@@ -925,9 +921,54 @@ func (mp *MultiProxy) serveSPA(w http.ResponseWriter, r *http.Request, app *conf
 		maxAge = 3600
 	}
 
+	r.URL.Path = app.PathPrefix + path
+	fs := http.Dir(app.RootDir)
 	handler := http.StripPrefix(app.PathPrefix, http.FileServer(fs))
 	handler = cacheControlMiddleware(handler, maxAge)
 	handler.ServeHTTP(w, r)
+}
+
+// resolveStaticPath определяет какой файл отдать для запрошенного пути.
+// Поддерживает: index.html в директории, flat .html (about.html → /about),
+// SPA fallback (любой несуществующий путь → index.html).
+func (mp *MultiProxy) resolveStaticPath(rawPath string, app *config.StaticApp) string {
+	root := app.RootDir
+
+	// Если запрошен корень — отдаём index.html
+	if rawPath == "/" {
+		return "/" + app.IndexFile
+	}
+
+	// Убираем слеш в конце для единообразия
+	cleanPath := strings.TrimSuffix(rawPath, "/")
+
+	// Проверяем: существует ли директория с index.html
+	dirPath := root + cleanPath
+	indexInDir := root + cleanPath + "/" + app.IndexFile
+	if info, err := os.Stat(dirPath); err == nil && info.IsDir() {
+		if _, err := os.Stat(indexInDir); err == nil {
+			return rawPath // http.FileServer сам найдёт index.html
+		}
+		// Директория есть, но index.html нет — ищем flat .html
+		flatHTML := root + cleanPath + ".html"
+		if _, err := os.Stat(flatHTML); err == nil {
+			return cleanPath + ".html"
+		}
+	}
+
+	// Проверяем: существует ли flat .html (about.html → /about)
+	flatHTML := root + cleanPath + ".html"
+	if _, err := os.Stat(flatHTML); err == nil {
+		return cleanPath + ".html"
+	}
+
+	// Проверяем: существует ли сам файл как есть
+	if info, err := os.Stat(root + rawPath); err == nil && !info.IsDir() {
+		return rawPath
+	}
+
+	// Всё остальное — SPA fallback на index.html
+	return "/" + app.IndexFile
 }
 
 func cacheControlMiddleware(next http.Handler, maxAge int) http.Handler {
