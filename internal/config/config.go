@@ -414,8 +414,16 @@ func (c *Config) FindTargetForPath(path string, method string, host ...string) (
 	for _, rule := range c.Routing.Rules {
 		// Проверяем Host, если указан
 		if rule.Host != "" {
-			// Если у запроса нет Host или он не совпадает — скипаем
-			if reqHost == "" || !strings.EqualFold(reqHost, rule.Host) {
+			if reqHost == "" {
+				continue
+			}
+			// Wildcard host: *.example.com
+			if strings.HasPrefix(rule.Host, "*.") {
+				suffix := rule.Host[1:] // .example.com
+				if !strings.HasSuffix(reqHost, suffix) {
+					continue
+				}
+			} else if !strings.EqualFold(reqHost, rule.Host) {
 				continue
 			}
 		}
