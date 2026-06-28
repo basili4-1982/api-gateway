@@ -912,11 +912,6 @@ func (mp *MultiProxy) serveSPA(w http.ResponseWriter, r *http.Request, app *conf
 
 	path = mp.resolveStaticPath(path, app)
 
-	mp.logger.Debug("Serving static file",
-		zap.String("path", path),
-		zap.String("root", app.RootDir),
-	)
-
 	maxAge := app.MaxAge
 	if maxAge == 0 {
 		maxAge = 3600
@@ -935,9 +930,9 @@ func (mp *MultiProxy) serveSPA(w http.ResponseWriter, r *http.Request, app *conf
 func (mp *MultiProxy) resolveStaticPath(rawPath string, app *config.StaticApp) string {
 	root := app.RootDir
 
-	// Если запрошен корень — отдаём index.html
+	// Корень — FileServer сам найдёт index.html
 	if rawPath == "/" {
-		return "/" + app.IndexFile
+		return "/"
 	}
 
 	// Убираем слеш в конце для единообразия
@@ -968,8 +963,8 @@ func (mp *MultiProxy) resolveStaticPath(rawPath string, app *config.StaticApp) s
 		return rawPath
 	}
 
-	// Всё остальное — SPA fallback на index.html
-	return "/" + app.IndexFile
+	// Всё остальное — SPA fallback на корень (FileServer сам найдёт index.html)
+	return "/"
 }
 
 func cacheControlMiddleware(next http.Handler, maxAge int) http.Handler {
