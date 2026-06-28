@@ -922,7 +922,7 @@ func (mp *MultiProxy) serveSPA(w http.ResponseWriter, r *http.Request, app *conf
 		maxAge = 3600
 	}
 
-	r.URL.Path = app.PathPrefix + path
+	r.URL.Path = app.PathPrefix + strings.TrimPrefix(path, "/")
 	fs := http.Dir(app.RootDir)
 	handler := http.StripPrefix(app.PathPrefix, http.FileServer(fs))
 	handler = cacheControlMiddleware(handler, maxAge)
