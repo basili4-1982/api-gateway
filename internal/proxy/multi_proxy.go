@@ -887,6 +887,13 @@ func (mp *MultiProxy) serveStatic(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 
+	// Проверяем skip_prefixes — если путь начинается с одного из них, пропускаем статику
+	for _, skip := range mp.config.Load().Static.SkipPrefixes {
+		if strings.HasPrefix(r.URL.Path, skip) {
+			return false
+		}
+	}
+
 	for _, app := range mp.config.Load().Static.Apps {
 		if strings.HasPrefix(r.URL.Path, app.PathPrefix) {
 			mp.serveSPA(w, r, &app)
@@ -904,8 +911,7 @@ func (mp *MultiProxy) serveSPA(w http.ResponseWriter, r *http.Request, app *conf
 	}
 
 	fullPath := app.RootDir + path
-	info, err := os.Stat(fullPath)
-	if err != nil || info.IsDir() {
+	if _, err := os.Stat(fullPath); os.IsNotExist(err) {
 		path = "/" + app.IndexFile
 	}
 

@@ -223,7 +223,7 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 		reqID := r.Context().Value(ctxKeyRequestID).(string)
 		traceID := r.Context().Value(ctxKeyTraceID).(string)
 
-		target, rule := mp.config.Load().FindTargetForPath(r.URL.Path, r.Method)
+		target, rule := mp.config.Load().FindTargetForPath(r.URL.Path, r.Method, r.Host)
 
 		rw := newResponseWriter(w)
 
