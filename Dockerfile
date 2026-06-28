@@ -1,8 +1,6 @@
 # Сборка
-FROM golang:1.25-alpine AS builder
+FROM golang:1-alpine AS builder
 
-ARG TOKEN=token
-ARG USER=user
 ARG GIT_SHA
 ARG BUILD_TIME
 ARG BUILD_RUN_ID
@@ -10,10 +8,6 @@ ARG BUILD_RUN_ID
 WORKDIR /build
 
 RUN apk add --no-cache git
-
-RUN echo "machine github.com" > ~/.netrc &&  \
-    echo "login ${USER}" >> ~/.netrc && \
-    echo "password ${TOKEN}" >> ~/.netrc
 
 # Кешируем зависимости
 COPY go.mod go.sum ./
