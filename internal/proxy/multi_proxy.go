@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -905,8 +906,8 @@ func (mp *MultiProxy) serveStatic(w http.ResponseWriter, r *http.Request) bool {
 
 func (mp *MultiProxy) serveSPA(w http.ResponseWriter, r *http.Request, app *config.StaticApp) {
 	path := strings.TrimPrefix(r.URL.Path, app.PathPrefix)
-	if path == "" {
-		path = "/"
+	if path == "" || path[0] != '/' {
+		path = "/" + path
 	}
 
 	path = mp.resolveStaticPath(path, app)
@@ -943,27 +944,27 @@ func (mp *MultiProxy) resolveStaticPath(rawPath string, app *config.StaticApp) s
 	cleanPath := strings.TrimSuffix(rawPath, "/")
 
 	// Проверяем: существует ли директория с index.html
-	dirPath := root + cleanPath
-	indexInDir := root + cleanPath + "/" + app.IndexFile
+	dirPath := filepath.Join(root, cleanPath)
+	indexInDir := filepath.Join(root, cleanPath, app.IndexFile)
 	if info, err := os.Stat(dirPath); err == nil && info.IsDir() {
 		if _, err := os.Stat(indexInDir); err == nil {
 			return rawPath // http.FileServer сам найдёт index.html
 		}
 		// Директория есть, но index.html нет — ищем flat .html
-		flatHTML := root + cleanPath + ".html"
+		flatHTML := dirPath + ".html"
 		if _, err := os.Stat(flatHTML); err == nil {
 			return cleanPath + ".html"
 		}
 	}
 
 	// Проверяем: существует ли flat .html (about.html → /about)
-	flatHTML := root + cleanPath + ".html"
+	flatHTML := filepath.Join(root, cleanPath+".html")
 	if _, err := os.Stat(flatHTML); err == nil {
 		return cleanPath + ".html"
 	}
 
 	// Проверяем: существует ли сам файл как есть
-	if info, err := os.Stat(root + rawPath); err == nil && !info.IsDir() {
+	if info, err := os.Stat(filepath.Join(root, rawPath)); err == nil && !info.IsDir() {
 		return rawPath
 	}
 
