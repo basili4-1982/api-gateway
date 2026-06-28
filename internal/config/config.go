@@ -47,7 +47,8 @@ type StaticApp struct {
 
 // StaticConfig конфигурация раздачи статических SPA
 type StaticConfig struct {
-	Apps []StaticApp `yaml:"apps"`
+	Apps         []StaticApp `yaml:"apps"`
+	SkipPrefixes []string    `yaml:"skip_prefixes,omitempty"` // пути, которые НЕ отдавать статикой (например /api)
 }
 type App struct {
 	Env               string   `yaml:"env"`
@@ -84,6 +85,7 @@ type RoutingConfig struct {
 
 // RoutingRule правило маршрутизации
 type RoutingRule struct {
+	Host       string         `yaml:"host,omitempty"`       // домен для матчинга (опционально)
 	PathPrefix string         `yaml:"path_prefix"`          // путь для матчинга
 	TargetName string         `yaml:"target_name"`          // имя таргета
 	Methods    []string       `yaml:"methods"`              // HTTP методы (опционально)
@@ -400,11 +402,24 @@ func (c *Config) GetTargetByName(name string) *TargetConfig {
 }
 
 // FindTargetForPath находит таргет для пути на основе правил маршрутизации
-func (c *Config) FindTargetForPath(path string, method string) (*TargetConfig, *RoutingRule) {
+func (c *Config) FindTargetForPath(path string, method string, host ...string) (*TargetConfig, *RoutingRule) {
 	var bestMatch *RoutingRule
 	var bestMatchLen int
 
+	reqHost := ""
+	if len(host) > 0 {
+		reqHost = host[0]
+	}
+
 	for _, rule := range c.Routing.Rules {
+		// Проверяем Host, если указан
+		if rule.Host != "" {
+			// Если у запроса нет Host или он не совпадает — скипаем
+			if reqHost == "" || !strings.EqualFold(reqHost, rule.Host) {
+				continue
+			}
+		}
+
 		// Проверяем метод, если указан
 		if len(rule.Methods) > 0 {
 			methodAllowed := false
