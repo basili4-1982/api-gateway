@@ -1,41 +1,37 @@
-# IDE
-.idea/
-*.iml
-.vscode/
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Go
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-*.test
-*.out
-vendor/
-
-# Config (sensitive data)
+/bin/
+/build/
+# Build
 config.local.yaml
 config.prod.yaml
-*.secret.yaml
+config.sarnas.yaml
+# Config (sensitive data)
+*.crt
+/dist/
+*.dll
+docs/obsidian/
+.DS_Store
+*.dylib
 .env
 .env.local
 .env.prod
-
-# TLS / certificates
-*.pem
-*.key
-*.crt
+*.exe
+*.exe~
+# Go
+# IDE
+.idea/
+*.iml
 !internal/jwtutil/testdata/*.pem
-
+*.key
 # Obsidian vault (documentation)
-docs/obsidian/
-
-# Build
+# OS
+*.out
+*.pem
+*.secret.yaml
+*.so
+*.test
+Thumbs.db
+# TLS / certificates
 tmp/
-/dist/
-/build/
-/bin/
+vendor/
+.vscode/
