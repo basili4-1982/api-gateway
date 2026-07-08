@@ -89,6 +89,11 @@ targets:
     timeout: 10s
     health_check: "http://lifecycle-engine:8080/healthz"
 
+  - name: "calendar-service"
+    url: "http://calendar-service:8090"
+    timeout: 10s
+    health_check: "http://calendar-service:8090/health"
+
 routing:
   rules:
     - path_prefix: "/api/auth/methods"
@@ -273,6 +278,12 @@ routing:
 
     - path_prefix: "/api/activity"
       target_name: "activity-service"
+      strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/calendar"
+      target_name: "calendar-service"
       strip_path: false
       auth:
         required: true
