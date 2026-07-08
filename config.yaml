@@ -234,6 +234,12 @@ routing:
       auth:
         required: true
 
+    - path_prefix: "/api/documents/generate"
+      target_name: "yii3-backend"
+      strip_path: false
+      auth:
+        required: true
+
     - path_prefix: "/api/documents"
       target_name: "document-service"
       strip_path: false
