@@ -1,10 +1,12 @@
-name: Lint and Test
+name: CI Build
 
 on:
   push:
     branches: [master]
-  pull_request:
-    branches: [master]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   lint:
@@ -51,3 +53,38 @@ jobs:
 
       - name: Go test
         run: go test ./... -count=1
+
+  build:
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            BUILD_TIME=${{ github.event.head_commit.timestamp }}
+            BUILD_RUN_ID=${{ github.run_id }}
