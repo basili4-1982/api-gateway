@@ -64,6 +64,11 @@ targets:
     timeout: 60s
     health_check: "http://monitoring-report-engine:8080/health"
 
+  - name: "analitics-engine"
+    url: "http://analitics-engine:8090"
+    timeout: 30s
+    health_check: "http://analitics-engine:8090/health"
+
   - name: "activity-service"
     url: "http://activity-service:8071"
     timeout: 30s
@@ -291,6 +296,12 @@ routing:
     - path_prefix: "/api/calendar"
       target_name: "calendar-service"
       strip_path: false
+      auth:
+        required: true
+
+    - path_prefix: "/api/analytics"
+      target_name: "analitics-engine"
+      strip_path: True
       auth:
         required: true
 
