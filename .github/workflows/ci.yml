@@ -27,6 +27,8 @@ jobs:
           golangci-lint run ./... --output.json.path=lint-report.json --issues-exit-code 0
 
       - name: Create/update lint issue
+        if: always()
+        continue-on-error: true
         run: |
           type gh &>/dev/null || sudo apt-get install -y -qq gh
           scripts/lint-to-issues.sh
