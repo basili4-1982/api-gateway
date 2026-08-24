@@ -34,7 +34,7 @@ type RouteConfig struct {
 
 var corsHeaders = map[string]string{
 	"Access-Control-Allow-Origin":      "", // Будет заполняться динамически
-	"Access-Control-Allow-Methods":     "GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD",
+	"Access-Control-Allow-Methods":     "GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD, QUERY",
 	"Access-Control-Allow-Headers":     "Origin, Content-Type, Accept, Authorization, X-Request-ID, X-User-ID, X-User-Email, X-User-Roles",
 	"Access-Control-Expose-Headers":    "X-User-ID, X-User-Email, X-User-Roles, X-Proxy, X-Request-ID, Authorization",
 	"Access-Control-Allow-Credentials": "true",

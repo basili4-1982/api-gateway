@@ -282,7 +282,7 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 		}
 
 		// Читаем тело запроса для передачи в аудит
-		if r.Body != nil && (r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH") {
+		if r.Body != nil && (r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH" || r.Method == "QUERY") {
 			bodyBytes, _ := io.ReadAll(r.Body)
 			r.Body.Close()
 			if len(bodyBytes) > 0 && len(bodyBytes) < 65536 {
