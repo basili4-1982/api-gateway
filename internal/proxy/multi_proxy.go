@@ -74,21 +74,21 @@ const (
 
 // MultiProxy основной прокси сервер с поддержкой множественных таргетов
 type MultiProxy struct {
-	config         atomic.Pointer[config.Config]
-	targets        map[string]*TargetProxy
-	routeConfigs   []RouteConfig
-	routeByRule    map[*config.RoutingRule]*RouteConfig
-	jwtValidator   *jwtutil.JWTValidator
-	logger         *zap.Logger
-	metrics        *Metrics
-	mu             sync.RWMutex
-	httpServer     *http.Server
-	httpsServer    *http.Server
-	globalLimiter  *rate.Limiter
-	handler              http.Handler
-	tracerProvider       *TracerProvider
-	permissionsManager   *permissions.Manager
-	publisher            *Publisher
+	config             atomic.Pointer[config.Config]
+	targets            map[string]*TargetProxy
+	routeConfigs       []RouteConfig
+	routeByRule        map[*config.RoutingRule]*RouteConfig
+	jwtValidator       *jwtutil.JWTValidator
+	logger             *zap.Logger
+	metrics            *Metrics
+	mu                 sync.RWMutex
+	httpServer         *http.Server
+	httpsServer        *http.Server
+	globalLimiter      *rate.Limiter
+	handler            http.Handler
+	tracerProvider     *TracerProvider
+	permissionsManager *permissions.Manager
+	publisher          *Publisher
 }
 
 // HealthChecker проверяет здоровье таргета
