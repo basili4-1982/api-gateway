@@ -1,8 +1,10 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -24,6 +26,7 @@ const (
 	ctxKeyRule          contextKey = "rule"
 	ctxKeyRemainingPath contextKey = "remaining_path"
 	ctxKeyTargetProxy   contextKey = "target_proxy"
+	ctxKeyRequestBody   contextKey = "request_body"
 )
 
 // ──────── Panic Recovery ────────
@@ -130,19 +133,11 @@ func activeRequestMetricsMiddleware(metrics *Metrics) Middleware {
 
 // ──────── Health probes ────────
 
-func healthProbeMiddleware() Middleware {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/health" || r.URL.Path == "/ready" {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(`{"status":"ok"}`))
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
+var (
+	GitSHA     string
+	BuildTime  string
+	BuildRunID string
+)
 
 // ──────── Metrics endpoint ────────
 
@@ -228,7 +223,7 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 		reqID := r.Context().Value(ctxKeyRequestID).(string)
 		traceID := r.Context().Value(ctxKeyTraceID).(string)
 
-		target, rule := mp.config.Load().FindTargetForPath(r.URL.Path, r.Method)
+		target, rule := mp.config.Load().FindTargetForPath(r.URL.Path, r.Method, r.Host)
 
 		rw := newResponseWriter(w)
 
@@ -246,7 +241,7 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 		targetProxy, exists := mp.targets[target.Name]
 		mp.mu.RUnlock()
 
-		if !exists || !targetProxy.isHealthy() {
+		if !exists || !targetProxy.isHealthy(mp.config.Load().App.CircuitBreaker) {
 			mp.setCORSHeaders(rw.Header(), r)
 			http.Error(rw, "Target unavailable", http.StatusServiceUnavailable)
 			mp.metrics.IncRequests(r.Method, r.URL.Path, "503")
@@ -286,6 +281,21 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 			return
 		}
 
+		// Читаем тело запроса для передачи в аудит
+		if r.Body != nil && (r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH" || r.Method == "QUERY") {
+			bodyBytes, _ := io.ReadAll(r.Body)
+			r.Body.Close()
+			if len(bodyBytes) > 0 && len(bodyBytes) < 65536 {
+				r = r.WithContext(context.WithValue(r.Context(), ctxKeyRequestBody, bodyBytes))
+			}
+			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		}
+
+		// Publish on_request webhooks
+		if mp.publisher != nil {
+			mp.publisher.PublishOnRequest(r.Context(), r)
+		}
+
 		mp.logger.Debug("Proxying request",
 			zap.String("request_id", reqID),
 			zap.String("method", r.Method),
@@ -298,6 +308,11 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 
 		mp.metrics.IncRequests(r.Method, r.URL.Path, fmt.Sprintf("%d", rw.statusCode))
 		mp.metrics.ObserveDuration(r.Method, r.URL.Path, time.Since(startTime))
+
+		// Publish on_response webhooks
+		if mp.publisher != nil {
+			mp.publisher.PublishOnResponse(r.Context(), r, rw.statusCode)
+		}
 
 		mp.logAccess(reqID, traceID, r, rw.statusCode, time.Since(startTime), target)
 	})

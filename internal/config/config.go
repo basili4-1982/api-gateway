@@ -11,16 +11,18 @@ import (
 
 // Config представляет основную структуру конфигурации
 type Config struct {
-	App       `yaml:"application"`
-	Server    ServerConfig    `yaml:"server"`
-	TLS       *TLSConfig      `yaml:"tls,omitempty"`
-	Static    *StaticConfig   `yaml:"static,omitempty"`
-	Targets   []TargetConfig  `yaml:"targets"`
-	JWT       JWTConfig       `yaml:"jwt"`
-	BasicAuth BasicAuthConfig `yaml:"basic_auth"`
-	Logging   LoggingConfig   `yaml:"logging"`
-	Headers   HeadersConfig   `yaml:"headers"`
-	Routing   RoutingConfig   `yaml:"routing"`
+	App         `yaml:"application"`
+	Server      ServerConfig      `yaml:"server"`
+	TLS         *TLSConfig        `yaml:"tls,omitempty"`
+	Static      *StaticConfig     `yaml:"static,omitempty"`
+	Targets     []TargetConfig    `yaml:"targets"`
+	JWT         JWTConfig         `yaml:"jwt"`
+	BasicAuth   BasicAuthConfig   `yaml:"basic_auth"`
+	Logging     LoggingConfig     `yaml:"logging"`
+	Headers     HeadersConfig     `yaml:"headers"`
+	Routing     RoutingConfig     `yaml:"routing"`
+	Permissions PermissionsConfig `yaml:"permissions"`
+	Webhooks    []WebhookConfig   `yaml:"webhooks"`
 }
 
 // TLSConfig конфигурация TLS с автосертификатами (Let's Encrypt)
@@ -45,11 +47,13 @@ type StaticApp struct {
 
 // StaticConfig конфигурация раздачи статических SPA
 type StaticConfig struct {
-	Apps []StaticApp `yaml:"apps"`
+	Apps         []StaticApp `yaml:"apps"`
+	SkipPrefixes []string    `yaml:"skip_prefixes,omitempty"` // пути, которые НЕ отдавать статикой (например /api)
 }
 type App struct {
 	Env               string   `yaml:"env"`
 	HealthCheck       bool     `yaml:"health_check"`
+	CircuitBreaker    bool     `yaml:"circuit_breaker"`
 	MetricsAllowedIPs []string `yaml:"metrics_allowed_ips"`
 }
 
@@ -81,6 +85,7 @@ type RoutingConfig struct {
 
 // RoutingRule правило маршрутизации
 type RoutingRule struct {
+	Host       string         `yaml:"host,omitempty"`       // домен для матчинга (опционально)
 	PathPrefix string         `yaml:"path_prefix"`          // путь для матчинга
 	TargetName string         `yaml:"target_name"`          // имя таргета
 	Methods    []string       `yaml:"methods"`              // HTTP методы (опционально)
@@ -134,13 +139,54 @@ type CORSConfig struct {
 	MaxAge         int      `yaml:"max_age"`
 }
 
+// PermissionsConfig конфигурация модуля разрешений (permission-service)
+type PermissionsConfig struct {
+	Enabled         bool          `yaml:"enabled"`
+	ServiceURL      string        `yaml:"service_url"`
+	CacheTTL        time.Duration `yaml:"cache_ttl"`
+	HeaderName      string        `yaml:"header_name"`
+	InvalidateToken string        `yaml:"invalidate_token"`
+	APIKey          string        `yaml:"api_key"`
+}
+
 // HeadersConfig конфигурация заголовков
 type HeadersConfig struct {
 	StripAuthorization bool              `yaml:"strip_authorization"`
 	ForwardHeaders     bool              `yaml:"forward_headers"`
 	ClaimToHeader      map[string]string `yaml:"claim_to_header"`
 	AddHeaders         map[string]string `yaml:"add_headers"`
+	SignHeader         string            `yaml:"sign_header"`
 	CORS               *CORSConfig       `yaml:"cors,omitempty"`
+}
+
+// WebhookTrigger тип триггера для вебхука
+type WebhookTrigger string
+
+const (
+	TriggerOnRequest  WebhookTrigger = "on_request"
+	TriggerOnResponse WebhookTrigger = "on_response"
+)
+
+// WebhookTransport тип транспорта для вебхука
+type WebhookTransport string
+
+const (
+	TransportNATS    WebhookTransport = "nats"
+	TransportWebhook WebhookTransport = "webhook"
+)
+
+// WebhookConfig конфигурация вебхука/NATS публикации событий
+type WebhookConfig struct {
+	Name          string           `yaml:"name"`
+	Transport     WebhookTransport `yaml:"transport"`
+	NATSURL       string           `yaml:"nats_url"`
+	Subject       string           `yaml:"subject"`
+	WebhookURL    string           `yaml:"webhook_url"`
+	Trigger       WebhookTrigger   `yaml:"trigger"`
+	Methods       []string         `yaml:"methods"`
+	OnStatusCodes []int            `yaml:"on_status_codes"`
+	ExcludePaths  []string         `yaml:"exclude_paths"`
+	Async         bool             `yaml:"async"`
 }
 
 // LoggingConfig конфигурация логирования
@@ -304,8 +350,41 @@ func (c *Config) validate() error {
 
 	// Проверяем JWT конфигурацию
 	if c.JWT.Required {
-		if c.JWT.SecretKey == "" && c.JWT.PublicKeyFile == "" {
-			return fmt.Errorf("either jwt.secret_key or jwt.public_key_file must be provided when JWT is required")
+		c.JWT.ValidateExp = true
+	}
+
+	if c.Permissions.CacheTTL == 0 {
+		c.Permissions.CacheTTL = 300 * time.Second
+	}
+	if c.Permissions.HeaderName == "" {
+		c.Permissions.HeaderName = "X-User-Permissions"
+	}
+	if c.Permissions.InvalidateToken == "" && c.Permissions.APIKey != "" {
+		c.Permissions.InvalidateToken = c.Permissions.APIKey
+	}
+
+	if c.Permissions.Enabled && c.Permissions.ServiceURL == "" {
+		return fmt.Errorf("permissions.service_url is required when permissions.enabled is true")
+	}
+
+	for _, wh := range c.Webhooks {
+		if wh.Name == "" {
+			return fmt.Errorf("webhook name is required")
+		}
+		if wh.Transport == "" {
+			return fmt.Errorf("webhook %s: transport is required", wh.Name)
+		}
+		if wh.Transport == TransportNATS && wh.NATSURL == "" {
+			return fmt.Errorf("webhook %s: nats_url is required for nats transport", wh.Name)
+		}
+		if wh.Transport == TransportNATS && wh.Subject == "" {
+			return fmt.Errorf("webhook %s: subject is required for nats transport", wh.Name)
+		}
+		if wh.Transport == TransportWebhook && wh.WebhookURL == "" {
+			return fmt.Errorf("webhook %s: webhook_url is required for webhook transport", wh.Name)
+		}
+		if wh.Trigger == "" {
+			return fmt.Errorf("webhook %s: trigger is required (on_request|on_response)", wh.Name)
 		}
 	}
 
@@ -314,20 +393,41 @@ func (c *Config) validate() error {
 
 // GetTargetByName возвращает таргет по имени
 func (c *Config) GetTargetByName(name string) *TargetConfig {
-	for _, target := range c.Targets {
-		if target.Name == name {
-			return &target
+	for i := range c.Targets {
+		if c.Targets[i].Name == name {
+			return &c.Targets[i]
 		}
 	}
 	return nil
 }
 
 // FindTargetForPath находит таргет для пути на основе правил маршрутизации
-func (c *Config) FindTargetForPath(path string, method string) (*TargetConfig, *RoutingRule) {
+func (c *Config) FindTargetForPath(path string, method string, host ...string) (*TargetConfig, *RoutingRule) {
 	var bestMatch *RoutingRule
 	var bestMatchLen int
 
+	reqHost := ""
+	if len(host) > 0 {
+		reqHost = host[0]
+	}
+
 	for _, rule := range c.Routing.Rules {
+		// Проверяем Host, если указан
+		if rule.Host != "" {
+			if reqHost == "" {
+				continue
+			}
+			// Wildcard host: *.example.com
+			if strings.HasPrefix(rule.Host, "*.") {
+				suffix := rule.Host[1:] // .example.com
+				if !strings.HasSuffix(reqHost, suffix) {
+					continue
+				}
+			} else if !strings.EqualFold(reqHost, rule.Host) {
+				continue
+			}
+		}
+
 		// Проверяем метод, если указан
 		if len(rule.Methods) > 0 {
 			methodAllowed := false
