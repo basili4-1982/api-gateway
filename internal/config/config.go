@@ -11,18 +11,18 @@ import (
 
 // Config представляет основную структуру конфигурации
 type Config struct {
-	App       `yaml:"application"`
-	Server    ServerConfig    `yaml:"server"`
-	TLS       *TLSConfig      `yaml:"tls,omitempty"`
-	Static    *StaticConfig   `yaml:"static,omitempty"`
-	Targets   []TargetConfig  `yaml:"targets"`
-	JWT       JWTConfig       `yaml:"jwt"`
-	BasicAuth BasicAuthConfig `yaml:"basic_auth"`
-	Logging   LoggingConfig   `yaml:"logging"`
-	Headers   HeadersConfig   `yaml:"headers"`
-	Routing    RoutingConfig      `yaml:"routing"`
+	App         `yaml:"application"`
+	Server      ServerConfig      `yaml:"server"`
+	TLS         *TLSConfig        `yaml:"tls,omitempty"`
+	Static      *StaticConfig     `yaml:"static,omitempty"`
+	Targets     []TargetConfig    `yaml:"targets"`
+	JWT         JWTConfig         `yaml:"jwt"`
+	BasicAuth   BasicAuthConfig   `yaml:"basic_auth"`
+	Logging     LoggingConfig     `yaml:"logging"`
+	Headers     HeadersConfig     `yaml:"headers"`
+	Routing     RoutingConfig     `yaml:"routing"`
 	Permissions PermissionsConfig `yaml:"permissions"`
-	Webhooks   []WebhookConfig   `yaml:"webhooks"`
+	Webhooks    []WebhookConfig   `yaml:"webhooks"`
 }
 
 // TLSConfig конфигурация TLS с автосертификатами (Let's Encrypt)
@@ -141,12 +141,12 @@ type CORSConfig struct {
 
 // PermissionsConfig конфигурация модуля разрешений (permission-service)
 type PermissionsConfig struct {
-	Enabled           bool          `yaml:"enabled"`
-	ServiceURL        string        `yaml:"service_url"`
-	CacheTTL          time.Duration `yaml:"cache_ttl"`
-	HeaderName        string        `yaml:"header_name"`
-	InvalidateToken   string        `yaml:"invalidate_token"`
-	APIKey            string        `yaml:"api_key"`
+	Enabled         bool          `yaml:"enabled"`
+	ServiceURL      string        `yaml:"service_url"`
+	CacheTTL        time.Duration `yaml:"cache_ttl"`
+	HeaderName      string        `yaml:"header_name"`
+	InvalidateToken string        `yaml:"invalidate_token"`
+	APIKey          string        `yaml:"api_key"`
 }
 
 // HeadersConfig конфигурация заголовков
@@ -177,16 +177,16 @@ const (
 
 // WebhookConfig конфигурация вебхука/NATS публикации событий
 type WebhookConfig struct {
-	Name        string           `yaml:"name"`
-	Transport   WebhookTransport `yaml:"transport"`
-	NATSURL     string           `yaml:"nats_url"`
-	Subject     string           `yaml:"subject"`
-	WebhookURL  string           `yaml:"webhook_url"`
-	Trigger     WebhookTrigger   `yaml:"trigger"`
-	Methods     []string         `yaml:"methods"`
-	OnStatusCodes []int          `yaml:"on_status_codes"`
-	ExcludePaths []string        `yaml:"exclude_paths"`
-	Async       bool             `yaml:"async"`
+	Name          string           `yaml:"name"`
+	Transport     WebhookTransport `yaml:"transport"`
+	NATSURL       string           `yaml:"nats_url"`
+	Subject       string           `yaml:"subject"`
+	WebhookURL    string           `yaml:"webhook_url"`
+	Trigger       WebhookTrigger   `yaml:"trigger"`
+	Methods       []string         `yaml:"methods"`
+	OnStatusCodes []int            `yaml:"on_status_codes"`
+	ExcludePaths  []string         `yaml:"exclude_paths"`
+	Async         bool             `yaml:"async"`
 }
 
 // LoggingConfig конфигурация логирования
