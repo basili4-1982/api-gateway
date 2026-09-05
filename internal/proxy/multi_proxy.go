@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -9,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -56,7 +56,8 @@ type TargetProxy struct {
 	healthCheck *HealthChecker
 	mu          sync.RWMutex
 	healthy     bool
-	client      *http.Client
+	transport   *http.Transport
+	timeout     time.Duration
 
 	cbState          circuitState
 	failureCount     int
@@ -274,14 +275,12 @@ func (mp *MultiProxy) createTargetProxy(targetCfg *config.TargetConfig) (*Target
 		cbState:          stateClosed,
 		failureThreshold: defaultFailureThreshold,
 		cbTimeout:        defaultCBTimeout,
-		client: &http.Client{
-			Timeout: targetCfg.Timeout,
-			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				MaxIdleConnsPerHost: 10,
-				IdleConnTimeout:     90 * time.Second,
-				DisableCompression:  false,
-			},
+		timeout: targetCfg.Timeout,
+		transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 10,
+			IdleConnTimeout:     90 * time.Second,
+			DisableCompression:  false,
 		},
 	}
 
@@ -422,148 +421,77 @@ func (mp *MultiProxy) checkRoles(claims jwt.MapClaims, requiredRoles []string) e
 }
 
 // proxyRequest выполняет проксирование запроса
+// proxyRequest проксирует запрос через httputil.ReverseProxy. ReverseProxy
+// calls the RoundTripper directly (not an http.Client), so it never follows
+// a target's redirect responses itself — they're relayed to the real client
+// verbatim, exactly as a reverse proxy must. It also streams the response
+// body instead of buffering it, so long-lived responses (e.g. chatcom's SSE
+// comment stream) aren't held until the upstream closes the connection.
 func (mp *MultiProxy) proxyRequest(w http.ResponseWriter, r *http.Request, target *TargetProxy, remainingPath string) {
-	// Создаем URL для целевого сервера
-	targetURL := *target.targetURL
-	targetURL.Path = remainingPath
-	if targetURL.Path == "" {
-		targetURL.Path = "/"
+	if remainingPath == "" {
+		remainingPath = "/"
 	}
-	targetURL.RawQuery = r.URL.RawQuery
 
-	mp.logger.Debug("Proxying to target",
-		zap.String("target_url", targetURL.String()),
-		zap.String("method", r.Method),
-	)
-
-	// Логируем тело запроса если есть
-	var requestBody []byte
 	if r.Body != nil {
-		bodyReader := io.Reader(r.Body)
-		if mp.config.Load().Server.MaxRequestBodySize > 0 {
-			bodyReader = io.LimitReader(bodyReader, mp.config.Load().Server.MaxRequestBodySize)
+		if maxSize := mp.config.Load().Server.MaxRequestBodySize; maxSize > 0 {
+			r.Body = io.NopCloser(io.LimitReader(r.Body, maxSize))
 		}
-		requestBody, _ = io.ReadAll(bodyReader)
-		err := r.Body.Close()
-		if err != nil {
-			mp.logger.Error("failed to close body", zap.Error(err))
-			return
-		}
-		if mp.logger.Core().Enabled(zap.DebugLevel) && len(requestBody) > 0 {
-			mp.logger.Debug("Request body",
-				zap.String("target", target.config.Name),
-				zap.ByteString("body", requestBody),
-			)
-		}
-		// Восстанавливаем тело для дальнейшего использования
-		r.Body = io.NopCloser(bytes.NewBuffer(requestBody))
 	}
 
-	// Создаем новый запрос
-	proxyReq, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL.String(), r.Body)
-	if err != nil {
-		mp.logger.Error("Failed to create proxy request",
-			zap.Error(err),
-			zap.String("target", target.config.Name),
-		)
-		mp.setCORSHeaders(w.Header(), r)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Копируем заголовки
-	proxyReq.Header = r.Header.Clone()
-
-	// Remove Accept-Encoding to prevent Go transport from auto-decompressing.
-	// Otherwise Go strips Content-Encoding from response but keeps compressed body,
-	// browser gets gzip bytes without Content-Encoding header -> SyntaxError -> white screen.
-	proxyReq.Header.Del("Accept-Encoding")
-
-	// Выполняем запрос
 	mp.logger.Info("Sending request to target",
 		zap.String("target", target.config.Name),
-		zap.String("url", targetURL.String()),
-		zap.String("host", targetURL.Host),
-		zap.String("port", targetURL.Port()),
-		zap.Any("headers", r.Header),
+		zap.String("host", target.targetURL.Host),
+		zap.String("path", remainingPath),
 	)
 
-	resp, err := target.client.Do(proxyReq)
-	if err != nil {
-		if mp.config.Load().App.CircuitBreaker {
-			target.recordCall(err)
-		}
-		mp.setCORSHeaders(w.Header(), r)
-		mp.logger.Error("Proxy request failed",
-			zap.Error(err),
-			zap.String("target", target.config.Name),
-		)
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			mp.logger.Error("failed to close body", zap.Error(err))
-			return
-		}
-	}(resp.Body)
+	rp := &httputil.ReverseProxy{
+		Transport: target.transport,
+		Director: func(req *http.Request) {
+			req.URL.Scheme = target.targetURL.Scheme
+			req.URL.Host = target.targetURL.Host
+			req.URL.Path = remainingPath
+			req.Host = target.targetURL.Host
 
-	mp.logger.Debug("Received response from target",
-		zap.String("target", target.config.Name),
-		zap.Int("status", resp.StatusCode),
-	)
-
-	if mp.config.Load().App.CircuitBreaker {
-		if resp.StatusCode >= 500 {
-			target.recordCall(fmt.Errorf("upstream %d", resp.StatusCode))
-		} else {
-			target.recordCall(nil)
-		}
-	}
-
-	// Копируем заголовки ответа от бэкенда
-	for key, values := range resp.Header {
-		for _, value := range values {
-			w.Header().Add(key, value)
-		}
-	}
-
-	// Добавляем CORS заголовки
-	mp.setCORSHeaders(w.Header(), r)
-
-	// Устанавливаем статус код
-	w.WriteHeader(resp.StatusCode)
-
-	// Стримим тело ответа (без полной буферизации в память)
-	// Читаем тело полностью для отладки
-	bodyBytes, readErr := io.ReadAll(resp.Body)
-	if readErr != nil {
-		mp.logger.Error("Failed to read response body",
-			zap.Error(readErr),
-			zap.String("target", target.config.Name),
-		)
-		http.Error(w, readErr.Error(), http.StatusBadGateway)
-		return
-	}
-	mp.logger.Debug("Response body read",
-		zap.String("target", target.config.Name),
-		zap.Int("body_len", len(bodyBytes)),
-	)
-	bytesWritten, writeErr := w.Write(bodyBytes)
-	if writeErr != nil {
-		mp.logger.Error("Failed to write response body",
-			zap.Error(writeErr),
-			zap.String("target", target.config.Name),
-		)
-		return
+			// Remove Accept-Encoding to prevent Go transport from auto-decompressing.
+			// Otherwise Go strips Content-Encoding from response but keeps compressed body,
+			// browser gets gzip bytes without Content-Encoding header -> SyntaxError -> white screen.
+			req.Header.Del("Accept-Encoding")
+		},
+		ModifyResponse: func(resp *http.Response) error {
+			if mp.config.Load().App.CircuitBreaker {
+				if resp.StatusCode >= 500 {
+					target.recordCall(fmt.Errorf("upstream %d", resp.StatusCode))
+				} else {
+					target.recordCall(nil)
+				}
+			}
+			mp.setCORSHeaders(resp.Header, r)
+			mp.logger.Debug("Received response from target",
+				zap.String("target", target.config.Name),
+				zap.Int("status", resp.StatusCode),
+			)
+			return nil
+		},
+		ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
+			if mp.config.Load().App.CircuitBreaker {
+				target.recordCall(err)
+			}
+			mp.setCORSHeaders(rw.Header(), r)
+			mp.logger.Error("Proxy request failed",
+				zap.Error(err),
+				zap.String("target", target.config.Name),
+			)
+			http.Error(rw, err.Error(), http.StatusBadGateway)
+		},
 	}
 
-	mp.logger.Debug("Response sent to client",
-		zap.String("target", target.config.Name),
-		zap.Int("status", resp.StatusCode),
-		zap.Int("bytes_written", bytesWritten),
-	)
+	if target.timeout > 0 {
+		ctx, cancel := context.WithTimeout(r.Context(), target.timeout)
+		defer cancel()
+		r = r.WithContext(ctx)
+	}
+
+	rp.ServeHTTP(w, r)
 }
 
 // Обработчик OPTIONS запросов
