@@ -24,7 +24,11 @@ if [[ "$ERRORS" -gt 0 ]]; then
   jq -r '.Issues[] | "  • \(.Pos.Filename):\(.Pos.Line)  \(.FromLinter)  \(.Text)"' "$REPORT" 2>/dev/null
   echo ""
   echo "Issue будет создан/обновлён автоматически после push."
-  echo "Подробнее: https://github.com/X-didgital/$(basename "$ROOT_DIR")/issues?q=lint"
+  REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")
+  REPO_SLUG=$(echo "$REMOTE_URL" | sed -n 's|.*github.com[:/]\(.*\)\.git|\1|p')
+  if [[ -n "$REPO_SLUG" ]]; then
+    echo "Подробнее: https://github.com/$REPO_SLUG/issues?q=lint"
+  fi
   echo ""
 
   # Create/update issue silently
