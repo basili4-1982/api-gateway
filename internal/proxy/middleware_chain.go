@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,14 +21,26 @@ import (
 type contextKey string
 
 const (
-	ctxKeyRequestID     contextKey = "request_id"
-	ctxKeyTraceID       contextKey = "trace_id"
-	ctxKeyTarget        contextKey = "target"
-	ctxKeyRule          contextKey = "rule"
-	ctxKeyRemainingPath contextKey = "remaining_path"
-	ctxKeyTargetProxy   contextKey = "target_proxy"
-	ctxKeyRequestBody   contextKey = "request_body"
+	ctxKeyRequestIDs  contextKey = "request_ids"
+	ctxKeyTarget      contextKey = "target"
+	ctxKeyRule        contextKey = "rule"
+	ctxKeyTargetProxy contextKey = "target_proxy"
+	ctxKeyRequestBody contextKey = "request_body"
 )
+
+// requestIDs хранит request_id и trace_id одним значением контекста —
+// одна аллокация вместо двух отдельных context.WithValue.
+type requestIDs struct {
+	reqID   string
+	traceID string
+}
+
+func requestIDsFromContext(ctx context.Context) (reqID, traceID string) {
+	if ids, ok := ctx.Value(ctxKeyRequestIDs).(requestIDs); ok {
+		return ids.reqID, ids.traceID
+	}
+	return "", ""
+}
 
 // ──────── Panic Recovery ────────
 
@@ -69,9 +82,7 @@ func requestIDMiddleware() Middleware {
 			}
 			r.Header.Set("X-Trace-ID", traceID)
 
-			ctx := r.Context()
-			ctx = context.WithValue(ctx, ctxKeyRequestID, reqID)
-			ctx = context.WithValue(ctx, ctxKeyTraceID, traceID)
+			ctx := context.WithValue(r.Context(), ctxKeyRequestIDs, requestIDs{reqID: reqID, traceID: traceID})
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -101,9 +112,8 @@ func tracingMiddleware(tp *TracerProvider) Middleware {
 				attribute.String("http.user_agent", r.UserAgent()),
 			)
 
-			reqID := ctx.Value(ctxKeyRequestID)
-			if reqID != nil {
-				span.SetAttributes(attribute.String("request_id", reqID.(string)))
+			if reqID, _ := requestIDsFromContext(ctx); reqID != "" {
+				span.SetAttributes(attribute.String("request_id", reqID))
 			}
 
 			// Пропагируем trace context в заголовки upstream
@@ -220,8 +230,7 @@ func corsPreflightMiddleware(mp *MultiProxy, metrics *Metrics) Middleware {
 func (mp *MultiProxy) proxyHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		startTime := time.Now()
-		reqID := r.Context().Value(ctxKeyRequestID).(string)
-		traceID := r.Context().Value(ctxKeyTraceID).(string)
+		reqID, traceID := requestIDsFromContext(r.Context())
 
 		target, rule := mp.config.Load().FindTargetForPath(r.URL.Path, r.Method, r.Host)
 
@@ -296,17 +305,19 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 			mp.publisher.PublishOnRequest(r.Context(), r)
 		}
 
-		mp.logger.Debug("Proxying request",
-			zap.String("request_id", reqID),
-			zap.String("method", r.Method),
-			zap.String("path", r.URL.Path),
-			zap.String("target", target.Name),
-			zap.String("remaining_path", remainingPath),
-		)
+		if mp.config.Load().Logging.AccessLog {
+			mp.logger.Debug("Proxying request",
+				zap.String("request_id", reqID),
+				zap.String("method", r.Method),
+				zap.String("path", r.URL.Path),
+				zap.String("target", target.Name),
+				zap.String("remaining_path", remainingPath),
+			)
+		}
 
 		mp.proxyRequest(rw, r, targetProxy, remainingPath)
 
-		mp.metrics.IncRequests(r.Method, r.URL.Path, fmt.Sprintf("%d", rw.statusCode))
+		mp.metrics.IncRequests(r.Method, r.URL.Path, strconv.Itoa(rw.statusCode))
 		mp.metrics.ObserveDuration(r.Method, r.URL.Path, time.Since(startTime))
 
 		// Publish on_response webhooks

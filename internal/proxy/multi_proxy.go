@@ -51,13 +51,14 @@ const (
 
 // TargetProxy представляет прокси для конкретного таргета
 type TargetProxy struct {
-	config      *config.TargetConfig
-	targetURL   *url.URL
-	healthCheck *HealthChecker
-	mu          sync.RWMutex
-	healthy     bool
-	transport   *http.Transport
-	timeout     time.Duration
+	config       *config.TargetConfig
+	targetURL    *url.URL
+	healthCheck  *HealthChecker
+	mu           sync.RWMutex
+	healthy      bool
+	transport    *http.Transport
+	timeout      time.Duration
+	reverseProxy *httputil.ReverseProxy
 
 	cbState          circuitState
 	failureCount     int
@@ -121,7 +122,7 @@ func NewMultiProxy(cfg *config.Config, logger *zap.Logger) (*MultiProxy, error) 
 		routeByRule:  make(map[*config.RoutingRule]*RouteConfig),
 		jwtValidator: jwtValidator,
 		logger:       logger,
-		metrics:      NewMetrics(),
+		metrics:      NewMetrics(cfg.MetricsEnabled),
 	}
 	mp.config.Store(cfg)
 	mp.initGlobalLimiter(cfg)
@@ -150,8 +151,10 @@ func NewMultiProxy(cfg *config.Config, logger *zap.Logger) (*MultiProxy, error) 
 	handler = corsPreflightMiddleware(mp, mp.metrics)(handler)
 	handler = spaStaticMiddleware(mp)(handler)
 	handler = globalRateLimitMiddleware(mp.globalLimiter, mp.metrics)(handler)
-	handler = metricsEndpointMiddleware(mp.metrics, cfg.MetricsAllowedIPs)(handler)
-	handler = activeRequestMetricsMiddleware(mp.metrics)(handler)
+	if cfg.MetricsEnabled {
+		handler = metricsEndpointMiddleware(mp.metrics, cfg.MetricsAllowedIPs)(handler)
+		handler = activeRequestMetricsMiddleware(mp.metrics)(handler)
+	}
 	handler = tracingMiddleware(mp.tracerProvider)(handler)
 	handler = requestIDMiddleware()(handler)
 	handler = recoveryMiddleware(logger)(handler)
@@ -287,14 +290,15 @@ func (mp *MultiProxy) createTargetProxy(targetCfg *config.TargetConfig) (*Target
 		cbState:          stateClosed,
 		failureThreshold: defaultFailureThreshold,
 		cbTimeout:        defaultCBTimeout,
-		timeout: targetCfg.Timeout,
+		timeout:          targetCfg.Timeout,
 		transport: &http.Transport{
 			MaxIdleConns:        100,
-			MaxIdleConnsPerHost: 10,
+			MaxIdleConnsPerHost: 100,
 			IdleConnTimeout:     90 * time.Second,
 			DisableCompression:  false,
 		},
 	}
+	tp.reverseProxy = mp.newReverseProxy(tp)
 
 	if targetCfg.HealthCheck != "" && mp.config.Load().HealthCheck {
 		tp.healthCheck = &HealthChecker{
@@ -307,6 +311,95 @@ func (mp *MultiProxy) createTargetProxy(targetCfg *config.TargetConfig) (*Target
 	}
 
 	return tp, nil
+}
+
+// internalPathHeader передаёт remainingPath в Director без лишней
+// аллокации context.WithValue — proxyRequest выставляет его перед вызовом
+// ServeHTTP и удаляет сразу после (синхронно), поэтому наружу он никогда
+// не уходит и не попадает в аудит/вебхуки.
+const internalPathHeader = "X-Gateway-Internal-Path"
+
+// proxyBufferPool переиспользует 32KB буферы для копирования тела ответа
+// (httputil.ReverseProxy.copyBuffer). Без него ReverseProxy аллоцирует
+// новый буфер на КАЖДЫЙ проксированный запрос — это самая крупная разовая
+// аллокация на горячем пути, гораздо больше, чем структуры вроде
+// responseWriter. Один пул на весь процесс: буферы одного размера, общий
+// пул даёт больше переиспользования, чем пул на таргет.
+type proxyBufferPool struct {
+	pool sync.Pool
+}
+
+func newProxyBufferPool() *proxyBufferPool {
+	return &proxyBufferPool{
+		pool: sync.Pool{
+			New: func() any {
+				b := make([]byte, 32*1024)
+				return &b
+			},
+		},
+	}
+}
+
+func (p *proxyBufferPool) Get() []byte {
+	return *(p.pool.Get().(*[]byte))
+}
+
+func (p *proxyBufferPool) Put(b []byte) {
+	p.pool.Put(&b)
+}
+
+var sharedProxyBufferPool = newProxyBufferPool()
+
+// newReverseProxy строит httputil.ReverseProxy один раз на таргет.
+// Director читает путь из internalPathHeader, поэтому один и тот же
+// экземпляр безопасно переиспользуется для всех запросов к этому таргету —
+// без аллокации новых Director/ModifyResponse/ErrorHandler замыканий на
+// каждый запрос.
+func (mp *MultiProxy) newReverseProxy(target *TargetProxy) *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
+		Transport:  target.transport,
+		BufferPool: sharedProxyBufferPool,
+		Director: func(req *http.Request) {
+			req.URL.Scheme = target.targetURL.Scheme
+			req.URL.Host = target.targetURL.Host
+			if path := req.Header.Get(internalPathHeader); path != "" {
+				req.URL.Path = path
+				req.Header.Del(internalPathHeader)
+			}
+			req.Host = target.targetURL.Host
+
+			// Remove Accept-Encoding to prevent Go transport from auto-decompressing.
+			// Otherwise Go strips Content-Encoding from response but keeps compressed body,
+			// browser gets gzip bytes without Content-Encoding header -> SyntaxError -> white screen.
+			req.Header.Del("Accept-Encoding")
+		},
+		ModifyResponse: func(resp *http.Response) error {
+			if mp.config.Load().App.CircuitBreaker {
+				// Получить любой HTTP-ответ от таргета, даже 5xx, значит транспорт
+				// исправен — это уровень приложения на бэкенде, а не недоступность
+				// таргета. Пробой цепи должны вызывать только ошибки транспорта,
+				// которые попадают в ErrorHandler ниже.
+				target.recordCall(nil)
+			}
+			mp.setCORSHeaders(resp.Header, resp.Request)
+			mp.logger.Debug("Received response from target",
+				zap.String("target", target.config.Name),
+				zap.Int("status", resp.StatusCode),
+			)
+			return nil
+		},
+		ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
+			if mp.config.Load().App.CircuitBreaker {
+				target.recordCall(err)
+			}
+			mp.setCORSHeaders(rw.Header(), req)
+			mp.logger.Error("Proxy request failed",
+				zap.Error(err),
+				zap.String("target", target.config.Name),
+			)
+			http.Error(rw, err.Error(), http.StatusBadGateway)
+		},
+	}
 }
 
 // modifyRequest модифицирует запрос перед отправкой
@@ -460,52 +553,15 @@ func (mp *MultiProxy) proxyRequest(w http.ResponseWriter, r *http.Request, targe
 		}
 	}
 
-	mp.logger.Info("Sending request to target",
-		zap.String("target", target.config.Name),
-		zap.String("host", target.targetURL.Host),
-		zap.String("path", remainingPath),
-	)
-
-	rp := &httputil.ReverseProxy{
-		Transport: target.transport,
-		Director: func(req *http.Request) {
-			req.URL.Scheme = target.targetURL.Scheme
-			req.URL.Host = target.targetURL.Host
-			req.URL.Path = remainingPath
-			req.Host = target.targetURL.Host
-
-			// Remove Accept-Encoding to prevent Go transport from auto-decompressing.
-			// Otherwise Go strips Content-Encoding from response but keeps compressed body,
-			// browser gets gzip bytes without Content-Encoding header -> SyntaxError -> white screen.
-			req.Header.Del("Accept-Encoding")
-		},
-		ModifyResponse: func(resp *http.Response) error {
-			if mp.config.Load().App.CircuitBreaker {
-				// Получить любой HTTP-ответ от таргета, даже 5xx, значит транспорт
-				// исправен — это уровень приложения на бэкенде, а не недоступность
-				// таргета. Пробой цепи должны вызывать только ошибки транспорта,
-				// которые попадают в ErrorHandler ниже.
-				target.recordCall(nil)
-			}
-			mp.setCORSHeaders(resp.Header, r)
-			mp.logger.Debug("Received response from target",
-				zap.String("target", target.config.Name),
-				zap.Int("status", resp.StatusCode),
-			)
-			return nil
-		},
-		ErrorHandler: func(rw http.ResponseWriter, req *http.Request, err error) {
-			if mp.config.Load().App.CircuitBreaker {
-				target.recordCall(err)
-			}
-			mp.setCORSHeaders(rw.Header(), r)
-			mp.logger.Error("Proxy request failed",
-				zap.Error(err),
-				zap.String("target", target.config.Name),
-			)
-			http.Error(rw, err.Error(), http.StatusBadGateway)
-		},
+	if mp.config.Load().Logging.AccessLog {
+		mp.logger.Info("Sending request to target",
+			zap.String("target", target.config.Name),
+			zap.String("host", target.targetURL.Host),
+			zap.String("path", remainingPath),
+		)
 	}
+
+	r.Header.Set(internalPathHeader, remainingPath)
 
 	if target.timeout > 0 {
 		ctx, cancel := context.WithTimeout(r.Context(), target.timeout)
@@ -513,7 +569,8 @@ func (mp *MultiProxy) proxyRequest(w http.ResponseWriter, r *http.Request, targe
 		r = r.WithContext(ctx)
 	}
 
-	rp.ServeHTTP(w, r)
+	target.reverseProxy.ServeHTTP(w, r)
+	r.Header.Del(internalPathHeader)
 }
 
 // Обработчик OPTIONS запросов
@@ -534,6 +591,9 @@ func (mp *MultiProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // logAccess пишет единую строчку access log
 func (mp *MultiProxy) logAccess(reqID, traceID string, r *http.Request, statusCode int, duration time.Duration, target *config.TargetConfig) {
+	if !mp.config.Load().Logging.AccessLog {
+		return
+	}
 	mp.logger.Info("Access",
 		zap.String("request_id", reqID),
 		zap.String("trace_id", traceID),

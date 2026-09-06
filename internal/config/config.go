@@ -54,6 +54,7 @@ type App struct {
 	Env               string   `yaml:"env"`
 	HealthCheck       bool     `yaml:"health_check"`
 	CircuitBreaker    bool     `yaml:"circuit_breaker"`
+	MetricsEnabled    bool     `yaml:"metrics_enabled"` // сбор метрик и /metrics эндпоинт; выкл. по умолчанию (доп. накладные расходы на запрос)
 	MetricsAllowedIPs []string `yaml:"metrics_allowed_ips"`
 }
 
@@ -191,8 +192,9 @@ type WebhookConfig struct {
 
 // LoggingConfig конфигурация логирования
 type LoggingConfig struct {
-	Level  string `yaml:"level"`  // debug, info, warn, error
-	Format string `yaml:"format"` // json или text
+	Level     string `yaml:"level"`      // debug, info, warn, error
+	Format    string `yaml:"format"`     // json или text
+	AccessLog bool   `yaml:"access_log"` // построчный лог каждого запроса; выкл. по умолчанию (аллокации на каждый запрос)
 }
 
 // Load загружает конфигурацию из файла

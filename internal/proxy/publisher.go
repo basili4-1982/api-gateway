@@ -117,11 +117,12 @@ func (p *Publisher) shouldPublish(wh config.WebhookConfig, r *http.Request, stat
 }
 
 func (p *Publisher) buildEvent(r *http.Request, statusCode int) AuditEvent {
+	reqID, _ := requestIDsFromContext(r.Context())
 	e := AuditEvent{
 		Method:     r.Method,
 		Path:       r.URL.Path,
 		Query:      r.URL.RawQuery,
-		RequestID:  r.Context().Value(ctxKeyRequestID).(string),
+		RequestID:  reqID,
 		Timestamp:  time.Now(),
 		StatusCode: statusCode,
 		Headers:    make(map[string]string),

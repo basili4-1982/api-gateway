@@ -4,6 +4,8 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -19,6 +21,14 @@ import (
 func main() {
 	configPath := flag.String("config", "/etc/proxy/config.yaml", "path to config file")
 	flag.Parse()
+
+	// pprof — только если явно включён через env, наружу не слушает по умолчанию.
+	if addr := os.Getenv("PPROF_ADDR"); addr != "" {
+		go func() {
+			fmt.Fprintf(os.Stderr, "pprof listening on %s\n", addr)
+			fmt.Fprintln(os.Stderr, http.ListenAndServe(addr, nil))
+		}()
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {

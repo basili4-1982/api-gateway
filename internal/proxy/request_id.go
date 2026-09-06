@@ -1,11 +1,9 @@
 package proxy
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
-	"time"
 )
 
 type responseWriter struct {
@@ -33,11 +31,9 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return rw.ResponseWriter.Write(b)
 }
 
+// generateRequestID возвращает короткий ID для трассировки/логов.
+// Не требует криптографической стойкости, поэтому используется быстрый
+// math/rand/v2 (без syscall на каждый вызов) вместо crypto/rand.
 func generateRequestID() string {
-	b := make([]byte, 8)
-	_, err := rand.Read(b)
-	if err != nil {
-		return fmt.Sprintf("%x", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(b)
+	return fmt.Sprintf("%016x", rand.Uint64())
 }

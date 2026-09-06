@@ -7,6 +7,8 @@ server:
 application:
   env: "dev"
   health_check: false
+  # metrics_enabled: true         # /metrics + active-requests счётчик; выкл. по умолчанию (доп. расходы на запрос)
+  # metrics_allowed_ips: ["10.0.0.5"]
 
 # TLS with auto certificates (Let's Encrypt)
 # Uncomment for production:
@@ -147,3 +149,4 @@ headers:
 logging:
   level: "debug"
   format: "console"
+  # access_log: true              # построчный лог каждого запроса; выкл. по умолчанию (доп. расходы на запрос)
