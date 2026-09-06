@@ -481,11 +481,11 @@ func (mp *MultiProxy) proxyRequest(w http.ResponseWriter, r *http.Request, targe
 		},
 		ModifyResponse: func(resp *http.Response) error {
 			if mp.config.Load().App.CircuitBreaker {
-				if resp.StatusCode >= 500 {
-					target.recordCall(fmt.Errorf("upstream %d", resp.StatusCode))
-				} else {
-					target.recordCall(nil)
-				}
+				// Получить любой HTTP-ответ от таргета, даже 5xx, значит транспорт
+				// исправен — это уровень приложения на бэкенде, а не недоступность
+				// таргета. Пробой цепи должны вызывать только ошибки транспорта,
+				// которые попадают в ErrorHandler ниже.
+				target.recordCall(nil)
 			}
 			mp.setCORSHeaders(resp.Header, r)
 			mp.logger.Debug("Received response from target",
@@ -586,6 +586,13 @@ func (tp *TargetProxy) setHealthy(healthy bool) {
 	tp.mu.Lock()
 	defer tp.mu.Unlock()
 	tp.healthy = healthy
+
+	// Health check уже подтвердил, что таргет отвечает — не ждать
+	// оставшийся cbTimeout, а сразу дать пробному запросу шанс закрыть цепь.
+	if healthy && tp.cbState == stateOpen {
+		tp.cbState = stateHalfOpen
+		tp.halfOpenProbe.Store(true)
+	}
 }
 
 // recordCall регистрирует результат запроса для circuit breaker

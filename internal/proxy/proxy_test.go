@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -71,6 +72,34 @@ func TestModifyRequest_AcceptsValidTokenOnRouteWithoutAuthBlock(t *testing.T) {
 		t.Fatalf("expected valid token to be accepted, got %v", err)
 	}
 }
+
+func TestSetHealthy_RecoveredHealthCheckHalfOpensCircuit(t *testing.T) {
+	tp := &TargetProxy{
+		healthy:          true,
+		cbState:          stateClosed,
+		failureThreshold: defaultFailureThreshold,
+		cbTimeout:        defaultCBTimeout,
+	}
+
+	// Три подряд ошибки транспорта открывают цепь.
+	tp.recordCall(errTest)
+	tp.recordCall(errTest)
+	tp.recordCall(errTest)
+	if tp.cbState != stateOpen {
+		t.Fatalf("expected circuit to be open after failures, got %v", tp.cbState)
+	}
+
+	// Health check подтвердил восстановление — не ждём cbTimeout.
+	tp.setHealthy(true)
+	if tp.cbState != stateHalfOpen {
+		t.Fatalf("expected circuit to half-open on health check recovery, got %v", tp.cbState)
+	}
+	if !tp.halfOpenProbe.Load() {
+		t.Fatal("expected a probe to be armed after health check recovery")
+	}
+}
+
+var errTest = fmt.Errorf("boom")
 
 func TestModifyRequest_OptionalAuthIgnoresInvalidToken(t *testing.T) {
 	mp := newTestMultiProxy(t, false)
