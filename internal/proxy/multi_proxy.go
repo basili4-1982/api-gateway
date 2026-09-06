@@ -196,17 +196,27 @@ func (mp *MultiProxy) setCORSHeaders(header http.Header, r *http.Request) {
 		if origin == "" {
 			origin = "*"
 		}
-		allowed := false
+		wildcard := false
+		exactMatch := false
 		for _, o := range cfg.Headers.CORS.AllowedOrigins {
-			if o == "*" || o == origin {
-				allowed = true
-				break
+			if o == "*" {
+				wildcard = true
+			} else if o == origin {
+				exactMatch = true
 			}
 		}
-		if !allowed {
+		if !wildcard && !exactMatch {
 			return
 		}
-		header.Set("Access-Control-Allow-Origin", origin)
+		// A reflected Origin must never be paired with
+		// Allow-Credentials unless that exact origin is allow-listed:
+		// otherwise any site could make credentialed requests and read
+		// the response.
+		if exactMatch {
+			header.Set("Access-Control-Allow-Origin", origin)
+		} else {
+			header.Set("Access-Control-Allow-Origin", "*")
+		}
 		if len(cfg.Headers.CORS.AllowedMethods) > 0 {
 			header.Set("Access-Control-Allow-Methods", joinStrings(cfg.Headers.CORS.AllowedMethods))
 		} else {
@@ -222,7 +232,9 @@ func (mp *MultiProxy) setCORSHeaders(header http.Header, r *http.Request) {
 		} else {
 			header.Set("Access-Control-Expose-Headers", corsHeaders["Access-Control-Expose-Headers"])
 		}
-		header.Set("Access-Control-Allow-Credentials", corsHeaders["Access-Control-Allow-Credentials"])
+		if exactMatch {
+			header.Set("Access-Control-Allow-Credentials", corsHeaders["Access-Control-Allow-Credentials"])
+		}
 		if cfg.Headers.CORS.MaxAge > 0 {
 			header.Set("Access-Control-Max-Age", fmt.Sprintf("%d", cfg.Headers.CORS.MaxAge))
 		} else {
@@ -323,53 +335,63 @@ func (mp *MultiProxy) modifyRequest(r *http.Request, targetCfg *config.TargetCon
 	}
 
 	if authHeader != "" {
-		if rule != nil && rule.Auth != nil && rule.Auth.Required {
-			claims, err := mp.jwtValidator.ParseAndValidate(authHeader)
-			if err != nil {
+		// A presented token is always cryptographically verified — regardless
+		// of whether the matched route declares its own `auth:` block. Routes
+		// without one previously inherited authRequired from the global
+		// jwt.required flag but never actually validated the token, so any
+		// non-empty Authorization header (or cml_access cookie) satisfied
+		// auth on those routes without checking its signature.
+		claims, err := mp.jwtValidator.ParseAndValidate(authHeader)
+		if err != nil {
+			if authRequired {
 				return fmt.Errorf("invalid token: %w", err)
 			}
-			if err := mp.jwtValidator.ValidateClaims(claims); err != nil {
+			return nil
+		}
+		if err := mp.jwtValidator.ValidateClaims(claims); err != nil {
+			if authRequired {
 				return fmt.Errorf("invalid token claims: %w", err)
 			}
-			if len(rule.Auth.Roles) > 0 {
-				if err := mp.checkRoles(claims, rule.Auth.Roles); err != nil {
-					return err
-				}
+			return nil
+		}
+		if rule != nil && rule.Auth != nil && len(rule.Auth.Roles) > 0 {
+			if err := mp.checkRoles(claims, rule.Auth.Roles); err != nil {
+				return err
 			}
-			extracted := jwtutil.ExtractClaims(claims, mp.config.Load().JWT.ClaimMappings)
-			for claimName, headerName := range mp.config.Load().Headers.ClaimToHeader {
-				if val, ok := extracted[claimName]; ok {
-					r.Header.Set(headerName, fmt.Sprintf("%v", val))
-				}
+		}
+		extracted := jwtutil.ExtractClaims(claims, mp.config.Load().JWT.ClaimMappings)
+		for claimName, headerName := range mp.config.Load().Headers.ClaimToHeader {
+			if val, ok := extracted[claimName]; ok {
+				r.Header.Set(headerName, fmt.Sprintf("%v", val))
 			}
+		}
 
-			// X-User-Signature: HMAC(user_id, api_secret) для верификации между сервисами
-			signHeader := mp.config.Load().Headers.SignHeader
-			if signHeader != "" {
-				if userIDVal, ok := extracted["id"]; ok {
-					userIDStr := fmt.Sprintf("%v", userIDVal)
-					secret := mp.config.Load().Permissions.APIKey
-					if secret != "" {
-						mac := hmac.New(sha256.New, []byte(secret))
-						mac.Write([]byte(userIDStr))
-						sig := hex.EncodeToString(mac.Sum(nil))
-						r.Header.Set(signHeader, sig)
-					}
+		// X-User-Signature: HMAC(user_id, api_secret) для верификации между сервисами
+		signHeader := mp.config.Load().Headers.SignHeader
+		if signHeader != "" {
+			if userIDVal, ok := extracted["id"]; ok {
+				userIDStr := fmt.Sprintf("%v", userIDVal)
+				secret := mp.config.Load().Permissions.APIKey
+				if secret != "" {
+					mac := hmac.New(sha256.New, []byte(secret))
+					mac.Write([]byte(userIDStr))
+					sig := hex.EncodeToString(mac.Sum(nil))
+					r.Header.Set(signHeader, sig)
 				}
 			}
+		}
 
-			// X-User-Permissions: если включён модуль permissions
-			if mp.permissionsManager != nil {
-				userIDVal, ok := extracted["id"]
-				if ok {
-					userID, err := toInt(userIDVal)
-					if err == nil {
-						if err := mp.permissionsManager.SetHeader(r, userID); err != nil {
-							mp.logger.Warn("failed to set permissions header",
-								zap.Int("user_id", userID),
-								zap.Error(err),
-							)
-						}
+		// X-User-Permissions: если включён модуль permissions
+		if mp.permissionsManager != nil {
+			userIDVal, ok := extracted["id"]
+			if ok {
+				userID, err := toInt(userIDVal)
+				if err == nil {
+					if err := mp.permissionsManager.SetHeader(r, userID); err != nil {
+						mp.logger.Warn("failed to set permissions header",
+							zap.Int("user_id", userID),
+							zap.Error(err),
+						)
 					}
 				}
 			}
@@ -867,6 +889,14 @@ func (mp *MultiProxy) resolveStaticPath(rawPath string, app *config.StaticApp) s
 
 	// Корень — FileServer сам найдёт index.html
 	if rawPath == "/" {
+		return "/"
+	}
+
+	// http.Dir отклонит ".." при непосредственной отдаче файла, но эта
+	// функция сама делает os.Stat по непроверенному пути — без этой проверки
+	// её ответ (SPA fallback vs "нашли flat .html" vs "нашли сам файл")
+	// работает как оракул существования файлов за пределами root.
+	if strings.Contains(rawPath, "..") {
 		return "/"
 	}
 
