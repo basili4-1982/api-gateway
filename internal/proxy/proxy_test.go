@@ -4,7 +4,83 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/basili4-1982/api-gateway/internal/config"
+	"github.com/basili4-1982/api-gateway/internal/jwtutil"
+	"github.com/golang-jwt/jwt/v5"
+	"go.uber.org/zap"
 )
+
+func signTestToken(claims jwt.MapClaims, secret string) string {
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	s, _ := token.SignedString([]byte(secret))
+	return s
+}
+
+// newTestMultiProxy builds a bare MultiProxy with just enough wired up to
+// exercise modifyRequest directly (skips NewMultiProxy, whose NewMetrics()
+// call registers process-global expvar names and panics if constructed more
+// than once per test binary).
+func newTestMultiProxy(t *testing.T, authRequired bool) *MultiProxy {
+	t.Helper()
+	cfg := &config.Config{
+		JWT: config.JWTConfig{
+			SecretKey:   "test-secret",
+			Algorithm:   "HS256",
+			ValidateExp: true,
+			Required:    authRequired,
+		},
+	}
+	jwtValidator, err := jwtutil.NewJWTValidator(
+		cfg.JWT.SecretKey, cfg.JWT.Algorithm,
+		cfg.JWT.ValidateExp, cfg.JWT.ValidateIss, cfg.JWT.ExpectedIss,
+		cfg.JWT.ValidateAud, cfg.JWT.ExpectedAud, cfg.JWT.PublicKeyFile,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp := &MultiProxy{jwtValidator: jwtValidator, logger: zap.NewNop()}
+	mp.config.Store(cfg)
+	return mp
+}
+
+// A routing rule with no per-route `auth:` block — only the global
+// jwt.required flag governs whether a token is required on it.
+var noAuthBlockRule = &config.RoutingRule{PathPrefix: "/api", TargetName: "x"}
+
+func TestModifyRequest_RejectsInvalidTokenOnRouteWithoutAuthBlock(t *testing.T) {
+	mp := newTestMultiProxy(t, true)
+	r := httptest.NewRequest("GET", "/api/anything", nil)
+	r.Header.Set("Authorization", "Bearer not-a-real-jwt")
+
+	if err := mp.modifyRequest(r, nil, noAuthBlockRule); err == nil {
+		t.Fatal("expected garbage token to be rejected on a route relying on global jwt.required, got nil error")
+	}
+}
+
+func TestModifyRequest_AcceptsValidTokenOnRouteWithoutAuthBlock(t *testing.T) {
+	mp := newTestMultiProxy(t, true)
+	token := signTestToken(jwt.MapClaims{
+		"sub": "123",
+		"exp": float64(1893456000), // 2030-01-01
+	}, "test-secret")
+	r := httptest.NewRequest("GET", "/api/anything", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+
+	if err := mp.modifyRequest(r, nil, noAuthBlockRule); err != nil {
+		t.Fatalf("expected valid token to be accepted, got %v", err)
+	}
+}
+
+func TestModifyRequest_OptionalAuthIgnoresInvalidToken(t *testing.T) {
+	mp := newTestMultiProxy(t, false)
+	r := httptest.NewRequest("GET", "/api/anything", nil)
+	r.Header.Set("Authorization", "Bearer not-a-real-jwt")
+
+	if err := mp.modifyRequest(r, nil, noAuthBlockRule); err != nil {
+		t.Fatalf("expected optional auth to let the request through, got %v", err)
+	}
+}
 
 func TestIPRateLimiter_Allow(t *testing.T) {
 	rl := NewIPRateLimiter(10, 5)
