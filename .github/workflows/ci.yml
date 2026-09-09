@@ -70,7 +70,9 @@ jobs:
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # Публикация в org-пакет ghcr требует PAT с write:packages
+          # (GITHUB_TOKEN GitHub отклоняет: write_package denied).
+          password: ${{ secrets.GHCR_TOKEN }}
 
       - id: meta
         uses: docker/metadata-action@v5
