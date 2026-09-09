@@ -14,18 +14,24 @@ import (
 )
 
 type AuditEvent struct {
-	Method      string            `json:"method"`
-	Path        string            `json:"path"`
-	Query       string            `json:"query,omitempty"`
-	UserID      string            `json:"user_id,omitempty"`
-	UserEmail   string            `json:"user_email,omitempty"`
-	UserRoles   string            `json:"user_roles,omitempty"`
-	RequestID   string            `json:"request_id"`
-	StatusCode  int               `json:"status_code,omitempty"`
-	Timestamp   time.Time         `json:"timestamp"`
-	Headers     map[string]string `json:"headers,omitempty"`
-	Changes     json.RawMessage   `json:"changes,omitempty"`
+	Method     string            `json:"method"`
+	Path       string            `json:"path"`
+	Query      string            `json:"query,omitempty"`
+	UserID     string            `json:"user_id,omitempty"`
+	UserEmail  string            `json:"user_email,omitempty"`
+	UserRoles  string            `json:"user_roles,omitempty"`
+	RequestID  string            `json:"request_id"`
+	StatusCode int               `json:"status_code,omitempty"`
+	Timestamp  time.Time         `json:"timestamp"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	Changes    json.RawMessage   `json:"changes,omitempty"`
+	// ResponseBody — тело ответа (только JSON, с ограничением размера).
+	// Публикуется, если у вебхука включён include_response_body.
+	ResponseBody json.RawMessage `json:"response_body,omitempty"`
 }
+
+// defaultMaxResponseBodyBytes — потолок захвата тела ответа для публикации.
+const defaultMaxResponseBodyBytes = 64 << 10 // 64 KiB
 
 type Publisher struct {
 	nc       *nats.Conn
@@ -116,7 +122,7 @@ func (p *Publisher) shouldPublish(wh config.WebhookConfig, r *http.Request, stat
 	return true
 }
 
-func (p *Publisher) buildEvent(r *http.Request, statusCode int) AuditEvent {
+func (p *Publisher) buildEvent(r *http.Request, statusCode int, wh config.WebhookConfig) AuditEvent {
 	e := AuditEvent{
 		Method:     r.Method,
 		Path:       r.URL.Path,
@@ -137,15 +143,46 @@ func (p *Publisher) buildEvent(r *http.Request, statusCode int) AuditEvent {
 		e.UserRoles = roles
 	}
 
-	if bodyBytes, ok := r.Context().Value(ctxKeyRequestBody).([]byte); ok && len(bodyBytes) > 0 {
-		var parsed map[string]interface{}
-		if err := json.Unmarshal(bodyBytes, &parsed); err == nil && len(parsed) > 0 {
-			raw, _ := json.Marshal(parsed)
-			e.Changes = raw
+	if wh.IncludeRequestBodyEnabled() {
+		if bodyBytes, ok := r.Context().Value(ctxKeyRequestBody).([]byte); ok && len(bodyBytes) > 0 {
+			var parsed map[string]interface{}
+			if err := json.Unmarshal(bodyBytes, &parsed); err == nil && len(parsed) > 0 {
+				raw, _ := json.Marshal(parsed)
+				e.Changes = raw
+			}
+		}
+	}
+
+	if wh.IncludeResponseBody {
+		if body, ok := r.Context().Value(ctxKeyResponseBody).([]byte); ok && len(body) > 0 {
+			if ct, _ := r.Context().Value(ctxKeyResponseContentType).(string); isJSONContentType(ct) {
+				e.ResponseBody = body
+			}
 		}
 	}
 
 	return e
+}
+
+// isJSONContentType — тело ответа публикуется только для JSON (не тащим
+// бинарные/файловые ответы в события).
+func isJSONContentType(ct string) bool {
+	ct = strings.ToLower(strings.TrimSpace(ct))
+	return strings.Contains(ct, "application/json") || strings.HasSuffix(ct, "+json")
+}
+
+// CaptureResponseBodies — нужно ли собирать тело ответа для запросов
+// (хотя бы один on_response вебхук с include_response_body).
+func (p *Publisher) CaptureResponseBodies() bool {
+	if p == nil {
+		return false
+	}
+	for _, wh := range p.webhooks {
+		if wh.Trigger == config.TriggerOnResponse && wh.IncludeResponseBody {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Publisher) PublishOnRequest(ctx context.Context, r *http.Request) {
@@ -157,7 +194,7 @@ func (p *Publisher) PublishOnRequest(ctx context.Context, r *http.Request) {
 			continue
 		}
 
-		event := p.buildEvent(r, 0)
+		event := p.buildEvent(r, 0, wh)
 		p.publish(ctx, wh, event)
 	}
 }
@@ -171,7 +208,7 @@ func (p *Publisher) PublishOnResponse(ctx context.Context, r *http.Request, stat
 			continue
 		}
 
-		event := p.buildEvent(r, statusCode)
+		event := p.buildEvent(r, statusCode, wh)
 		p.publish(ctx, wh, event)
 	}
 }
