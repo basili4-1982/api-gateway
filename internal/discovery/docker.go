@@ -19,6 +19,8 @@ type dockerClient struct {
 	http       *http.Client
 }
 
+// newDockerClient создаёт клиент Docker/Podman. Для unix://... настраивает
+// транспорт с DialContext на сокет; для http(s):// использует адрес напрямую.
 func newDockerClient(host, apiVersion string) (*dockerClient, error) {
 	c := &dockerClient{apiVersion: strings.Trim(apiVersion, "/"), http: &http.Client{}}
 
@@ -41,6 +43,7 @@ func newDockerClient(host, apiVersion string) (*dockerClient, error) {
 	return c, nil
 }
 
+// url собирает полный URL запроса, добавляя версию API, если она задана.
 func (c *dockerClient) url(path string) string {
 	if c.apiVersion == "" {
 		return c.baseURL + path
@@ -48,8 +51,12 @@ func (c *dockerClient) url(path string) string {
 	return c.baseURL + "/" + c.apiVersion + path
 }
 
+// listContainers запрашивает список контейнеров, у которых присутствует label
+// "<prefix>.enable". Значение label здесь намеренно не фильтруется: Docker
+// сравнивает key=value точно, а контракт допускает true/1/yes, поэтому
+// окончательное решение принимает ParseContainers.
 func (c *dockerClient) listContainers(ctx context.Context, labelPrefix string) ([]Container, error) {
-	filters := fmt.Sprintf(`{"label":["%s.enable=true"]}`, labelPrefix)
+	filters := fmt.Sprintf(`{"label":["%s.enable"]}`, labelPrefix)
 	u := c.url("/containers/json") + "?all=0&filters=" + url.QueryEscape(filters)
 
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)

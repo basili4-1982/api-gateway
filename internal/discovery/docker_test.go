@@ -2,10 +2,12 @@ package discovery
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDockerClient_ListContainers(t *testing.T) {
@@ -40,6 +42,43 @@ func TestDockerClient_ListContainers(t *testing.T) {
 	}
 	if _, ok := got[0].Networks["backend"]; !ok {
 		t.Errorf("network not parsed: %+v", got[0].Networks)
+	}
+}
+
+// TestDockerClient_EnableLabelValuesDiscoveredEndToEnd проверяет, что фильтр
+// listContainers требует только наличия label (без "=true"), а ParseContainers
+// затем принимает все документированные значения enable: 1 и yes.
+func TestDockerClient_EnableLabelValuesDiscoveredEndToEnd(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1.41/containers/json" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		var filters map[string][]string
+		if err := json.Unmarshal([]byte(r.URL.Query().Get("filters")), &filters); err != nil {
+			t.Errorf("bad filters %q: %v", r.URL.Query().Get("filters"), err)
+		}
+		if labels := filters["label"]; len(labels) != 1 || labels[0] != "gateway.enable" {
+			t.Errorf("filter must match label presence only, got %v", labels)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[
+			{"Id":"a","Names":["/svc-a"],"Labels":{"gateway.enable":"1","gateway.name":"a","gateway.port":"9000","gateway.path_prefix":"/a"},"Ports":[{"PrivatePort":9000,"Type":"tcp"}]},
+			{"Id":"b","Names":["/svc-b"],"Labels":{"gateway.enable":"yes","gateway.name":"b","gateway.port":"9001","gateway.path_prefix":"/b"},"Ports":[{"PrivatePort":9001,"Type":"tcp"}]}
+		]`))
+	}))
+	defer srv.Close()
+
+	c, err := newDockerClient(srv.URL, "v1.41")
+	if err != nil {
+		t.Fatal(err)
+	}
+	containers, err := c.listContainers(context.Background(), "gateway")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := ParseContainers(containers, ParseOptions{LabelPrefix: "gateway", DefaultTimeout: 30 * time.Second})
+	if len(res.Targets) != 2 {
+		t.Fatalf("expected enable=1 and enable=yes containers discovered, got %+v", res.Targets)
 	}
 }
 
