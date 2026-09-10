@@ -20,7 +20,7 @@ type dockerClient struct {
 }
 
 func newDockerClient(host, apiVersion string) (*dockerClient, error) {
-	c := &dockerClient{apiVersion: strings.Trim(apiVersion, "/"), http: &http.Client{Timeout: 10 * time.Second}}
+	c := &dockerClient{apiVersion: strings.Trim(apiVersion, "/"), http: &http.Client{}}
 
 	switch {
 	case strings.HasPrefix(host, "unix://"):
@@ -51,6 +51,9 @@ func (c *dockerClient) url(path string) string {
 func (c *dockerClient) listContainers(ctx context.Context, labelPrefix string) ([]Container, error) {
 	filters := fmt.Sprintf(`{"label":["%s.enable=true"]}`, labelPrefix)
 	u := c.url("/containers/json") + "?all=0&filters=" + url.QueryEscape(filters)
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {

@@ -43,6 +43,19 @@ func TestDockerClient_ListContainers(t *testing.T) {
 	}
 }
 
+func TestDockerClient_NoGlobalTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer srv.Close()
+
+	c, err := newDockerClient(srv.URL, "v1.41")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.http.Timeout != 0 {
+		t.Fatalf("client-wide timeout must be unset to keep events stream alive, got %v", c.http.Timeout)
+	}
+}
+
 func TestDockerClient_ListContainers_HTTPError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
