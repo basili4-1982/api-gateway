@@ -171,3 +171,190 @@ func TestDockerProvider_NonPositiveResyncDoesNotPanic(t *testing.T) {
 		_ = p.Stop()
 	}
 }
+
+func TestGrowBackoff(t *testing.T) {
+	cases := []struct {
+		in   time.Duration
+		want time.Duration
+	}{
+		{time.Second, 2 * time.Second},
+		{2 * time.Second, 4 * time.Second},
+		{20 * time.Second, 30 * time.Second},
+		{30 * time.Second, 30 * time.Second},
+		{time.Minute, 30 * time.Second},
+	}
+	for _, c := range cases {
+		if got := growBackoff(c.in); got != c.want {
+			t.Errorf("growBackoff(%v) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestStreamHealthy(t *testing.T) {
+	now := time.Now()
+	if !streamHealthy(1, now, now) {
+		t.Error("stream that delivered an event should be healthy")
+	}
+	if !streamHealthy(0, now.Add(-healthyStreamDuration), now) {
+		t.Error("stream running >= healthyStreamDuration should be healthy")
+	}
+	if streamHealthy(0, now.Add(-time.Second), now) {
+		t.Error("short stream without events should be unhealthy")
+	}
+}
+
+func TestDockerProvider_StopWaitsForCallback(t *testing.T) {
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var once sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1.41/containers/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		case r.URL.Path == "/v1.41/events":
+			w.Header().Set("Content-Type", "application/json")
+			<-r.Context().Done()
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	p, err := newDockerProvider(srv.URL, "v1.41",
+		ParseOptions{LabelPrefix: "gateway"}, 10*time.Millisecond, time.Hour, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	onResult := func(Result) {
+		once.Do(func() {
+			entered <- struct{}{}
+			<-release
+		})
+	}
+	go func() { _ = p.Start(ctx, onResult) }()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("onResult was not called")
+	}
+
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- p.Stop() }()
+
+	select {
+	case <-stopDone:
+		t.Fatal("Stop returned while onResult was still running")
+	case <-time.After(200 * time.Millisecond):
+		// ожидаемо: Stop блокируется, пока onResult не завершится
+	}
+
+	close(release)
+
+	select {
+	case <-stopDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not return after onResult completed")
+	}
+}
+
+func TestDockerProvider_StopBeforeStart(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1.41/containers/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		case r.URL.Path == "/v1.41/events":
+			w.Header().Set("Content-Type", "application/json")
+			<-r.Context().Done()
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	p, err := newDockerProvider(srv.URL, "v1.41",
+		ParseOptions{LabelPrefix: "gateway"}, 10*time.Millisecond, time.Hour, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	called := make(chan struct{}, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- p.Start(ctx, func(Result) {
+			select {
+			case called <- struct{}{}:
+			default:
+			}
+		})
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start did not return after Stop")
+	}
+	select {
+	case <-called:
+		t.Fatal("onResult called after Stop")
+	default:
+	}
+}
+
+func TestDockerProvider_BackoffGrowsOnCleanClose(t *testing.T) {
+	var mu sync.Mutex
+	conns := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1.41/containers/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		case r.URL.Path == "/v1.41/events":
+			mu.Lock()
+			conns++
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			// Поток сразу закрывается без событий — нездоровый реконнект.
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	p, err := newDockerProvider(srv.URL, "v1.41",
+		ParseOptions{LabelPrefix: "gateway"}, 10*time.Millisecond, time.Hour, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.initialBackoff = 50 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = p.Start(ctx, func(Result) {}) }()
+
+	time.Sleep(500 * time.Millisecond)
+	mu.Lock()
+	got := conns
+	mu.Unlock()
+	_ = p.Stop()
+
+	// Экспоненциальный рост (50,100,200,400мс) даёт ~4 подключения за 500мс;
+	// постоянный интервал 50мс — ~10. Порог 6 разделяет эти режимы.
+	if got > 6 {
+		t.Errorf("events reconnects are not backing off: got %d connections in 500ms", got)
+	}
+}
