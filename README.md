@@ -42,6 +42,33 @@ See [`config.local.example.yaml`](config.local.example.yaml) for all options.
 | `/api/v1/storage/public/*` | storage-api | No | — |
 | `/api/v1/storage/*` | storage-api | Yes | — |
 
+## Service discovery (Docker/Podman)
+
+Гейтвей умеет находить бэкенды по labels контейнеров (аналог Docker-провайдера
+Traefik). Включается секцией `discovery` в конфиге; socket монтируется read-only.
+
+Маркер: `gateway.enable=true`. Таргет: `gateway.name` (по умолчанию —
+`com.docker.compose.service`), `gateway.port`, `gateway.scheme`, `gateway.timeout`,
+`gateway.health`, `gateway.weight`.
+
+Роутеры: короткая форма `gateway.path_prefix`/`gateway.host`/`gateway.auth.required`
+(роутер `default`) или именованная `gateway.router.<id>.<field>` для нескольких
+правил на сервис. Поля: `host`, `path_prefix`, `methods`, `strip_path`,
+`auth.required`, `auth.roles`, `auth.strip_token`, `rate_limit.rps`,
+`rate_limit.burst`.
+
+Пример:
+
+    labels:
+      gateway.enable: "true"
+      gateway.name: "blog"
+      gateway.port: "8085"
+      gateway.router.api.path_prefix: "/api/blog"
+      gateway.router.api.auth.required: "false"
+      gateway.router.admin.path_prefix: "/api/admin/blog"
+      gateway.router.admin.auth.required: "true"
+      gateway.router.admin.auth.roles: "admin"
+
 ## Docker
 
 ```bash

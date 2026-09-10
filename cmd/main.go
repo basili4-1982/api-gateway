@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/basili4-1982/api-gateway/internal/config"
+	"github.com/basili4-1982/api-gateway/internal/discovery"
 	"github.com/basili4-1982/api-gateway/internal/logger"
 	"github.com/basili4-1982/api-gateway/internal/proxy"
 )
@@ -60,6 +61,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mgr, err := discovery.NewManager(cfg, log, func(updated *config.Config) {
+		if err := p.Reload(updated); err != nil {
+			log.Error("Failed to apply discovered config", zap.Error(err))
+		}
+	})
+	if err != nil {
+		log.Error("Failed to create discovery manager", zap.Error(err))
+		os.Exit(1)
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
@@ -71,6 +85,10 @@ func main() {
 			serverErrors <- err
 		}
 	}()
+
+	if err := mgr.Start(ctx); err != nil {
+		log.Error("Failed to start discovery", zap.Error(err))
+	}
 
 	log.Info("Multi-target JWT Proxy is running.",
 		zap.Int("port", cfg.Server.Port),
@@ -95,6 +113,7 @@ func main() {
 				if err := p.Reload(newCfg); err != nil {
 					log.Error("Failed to apply reloaded config", zap.Error(err))
 				}
+				mgr.SetBase(newCfg)
 			default:
 				log.Info("Received shutdown signal", zap.String("signal", sig.String()))
 				goto shutdown
@@ -107,6 +126,10 @@ shutdown:
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	if err := mgr.Stop(); err != nil {
+		log.Error("Error stopping discovery", zap.Error(err))
+	}
 
 	if err := p.Stop(shutdownCtx); err != nil {
 		log.Error("Error during shutdown", zap.Error(err))
