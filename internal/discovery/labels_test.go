@@ -284,3 +284,146 @@ func TestParseTarget_RouterFields(t *testing.T) {
 		})
 	}
 }
+
+func TestParseRouters_ShortFormIsDefault(t *testing.T) {
+	res := ParseContainers([]Container{{
+		ID: "c1",
+		Labels: map[string]string{
+			"gateway.enable":        "true",
+			"gateway.name":          "passport",
+			"gateway.port":          "8085",
+			"gateway.path_prefix":   "/api/auth/login",
+			"gateway.auth.required": "false",
+		},
+	}}, testOpts())
+
+	if len(res.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(res.Rules))
+	}
+	r := res.Rules[0]
+	if r.PathPrefix != "/api/auth/login" || r.TargetName != "passport" {
+		t.Errorf("rule: got %+v", r)
+	}
+	if r.Auth == nil || r.Auth.Required {
+		t.Errorf("auth.required should be false, got %+v", r.Auth)
+	}
+}
+
+func TestParseRouters_NamedRouters(t *testing.T) {
+	res := ParseContainers([]Container{{
+		ID: "c1",
+		Labels: map[string]string{
+			"gateway.enable":                           "true",
+			"gateway.name":                             "passport",
+			"gateway.port":                             "8085",
+			"gateway.router.auth.path_prefix":          "/api/auth",
+			"gateway.router.auth.auth.required":        "true",
+			"gateway.router.auth.auth.roles":           "user,admin",
+			"gateway.router.sessions.path_prefix":      "/api/admin/sessions",
+			"gateway.router.sessions.strip_path":       "true",
+			"gateway.router.sessions.methods":          "GET,POST",
+			"gateway.router.sessions.rate_limit.rps":   "20",
+			"gateway.router.sessions.rate_limit.burst": "40",
+		},
+	}}, testOpts())
+
+	if len(res.Rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(res.Rules))
+	}
+	byPrefix := map[string]config.RoutingRule{}
+	for _, r := range res.Rules {
+		byPrefix[r.PathPrefix] = r
+	}
+
+	auth := byPrefix["/api/auth"]
+	if auth.Auth == nil || !auth.Auth.Required {
+		t.Errorf("auth rule required: got %+v", auth.Auth)
+	}
+	if len(auth.Auth.Roles) != 2 || auth.Auth.Roles[0] != "user" {
+		t.Errorf("auth roles: got %v", auth.Auth.Roles)
+	}
+
+	sessions := byPrefix["/api/admin/sessions"]
+	if !sessions.StripPath {
+		t.Errorf("strip_path should be true")
+	}
+	if len(sessions.Methods) != 2 || sessions.Methods[0] != "GET" {
+		t.Errorf("methods: got %v", sessions.Methods)
+	}
+	if sessions.RateLimit == nil || sessions.RateLimit.RequestsPerSecond != 20 || sessions.RateLimit.Burst != 40 {
+		t.Errorf("rate limit: got %+v", sessions.RateLimit)
+	}
+}
+
+func TestParseRouters_MixedShortAndNamed(t *testing.T) {
+	res := ParseContainers([]Container{{
+		ID: "c1",
+		Labels: map[string]string{
+			"gateway.enable":                   "true",
+			"gateway.name":                     "svc",
+			"gateway.port":                     "9000",
+			"gateway.path_prefix":              "/default",
+			"gateway.router.extra.path_prefix": "/extra",
+		},
+	}}, testOpts())
+
+	if len(res.Rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(res.Rules))
+	}
+}
+
+func TestParseRouters_HostOnlyGetsRootPath(t *testing.T) {
+	res := ParseContainers([]Container{{
+		ID: "c1",
+		Labels: map[string]string{
+			"gateway.enable": "true",
+			"gateway.name":   "svc",
+			"gateway.port":   "9000",
+			"gateway.host":   "svc.local",
+		},
+	}}, testOpts())
+
+	if len(res.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(res.Rules))
+	}
+	if res.Rules[0].Host != "svc.local" || res.Rules[0].PathPrefix != "/" {
+		t.Errorf("rule: got %+v", res.Rules[0])
+	}
+}
+
+func TestParseRouters_NoHostNoPathSkipped(t *testing.T) {
+	res := ParseContainers([]Container{{
+		ID: "c1",
+		Labels: map[string]string{
+			"gateway.enable":        "true",
+			"gateway.name":          "svc",
+			"gateway.port":          "9000",
+			"gateway.auth.required": "true",
+		},
+	}}, testOpts())
+
+	if len(res.Targets) != 0 || len(res.Rules) != 0 {
+		t.Fatalf("container without host/path must be skipped, got %+v", res)
+	}
+}
+
+func TestParseRouters_AuthStripToken(t *testing.T) {
+	res := ParseContainers([]Container{{
+		ID: "c1",
+		Labels: map[string]string{
+			"gateway.enable":           "true",
+			"gateway.name":             "svc",
+			"gateway.port":             "9000",
+			"gateway.path_prefix":      "/api",
+			"gateway.auth.required":    "true",
+			"gateway.auth.strip_token": "true",
+		},
+	}}, testOpts())
+
+	if len(res.Rules) != 1 || res.Rules[0].Auth == nil {
+		t.Fatalf("expected rule with auth, got %+v", res.Rules)
+	}
+	if res.Rules[0].Auth.StripToken == nil || !*res.Rules[0].Auth.StripToken {
+		t.Errorf("strip_token should be true, got %+v", res.Rules[0].Auth.StripToken)
+	}
+}

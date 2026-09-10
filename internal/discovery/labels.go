@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -162,28 +163,56 @@ var routerFields = map[string]bool{
 	"rate_limit.burst": true,
 }
 
-// parseRouters собирает роутеры из labels (короткая форма = роутер "default").
+// parseRouters собирает роутеры из labels. Короткая форма "<prefix>.<field>"
+// даёт роутер "default"; именованная "<prefix>.router.<id>.<field>" — роутер id.
+// Роутеры сортируются по id для детерминированного порядка.
 func parseRouters(labels map[string]string, prefix string) []config.RoutingRule {
 	shortPrefix := prefix + "."
-	fields := make(map[string]string)
+	routerPrefix := prefix + ".router."
+	fields := make(map[string]map[string]string)
+
 	for k, v := range labels {
-		if !strings.HasPrefix(k, shortPrefix) {
-			continue
-		}
-		field := strings.TrimPrefix(k, shortPrefix)
-		if routerFields[field] {
-			fields[field] = v
+		switch {
+		case strings.HasPrefix(k, routerPrefix):
+			rest := strings.TrimPrefix(k, routerPrefix)
+			id, field, ok := strings.Cut(rest, ".")
+			if !ok || id == "" || !routerFields[field] {
+				continue
+			}
+			if fields[id] == nil {
+				fields[id] = map[string]string{}
+			}
+			fields[id][field] = v
+		case strings.HasPrefix(k, shortPrefix):
+			field := strings.TrimPrefix(k, shortPrefix)
+			if !routerFields[field] {
+				continue
+			}
+			if fields["default"] == nil {
+				fields["default"] = map[string]string{}
+			}
+			fields["default"][field] = v
 		}
 	}
 
-	rule := buildRule(fields)
-	if rule.Host == "" && rule.PathPrefix == "" {
-		return nil
+	ids := make([]string, 0, len(fields))
+	for id := range fields {
+		ids = append(ids, id)
 	}
-	if rule.Host != "" && rule.PathPrefix == "" {
-		rule.PathPrefix = "/"
+	sort.Strings(ids)
+
+	var out []config.RoutingRule
+	for _, id := range ids {
+		rule := buildRule(fields[id])
+		if rule.Host == "" && rule.PathPrefix == "" {
+			continue
+		}
+		if rule.Host != "" && rule.PathPrefix == "" {
+			rule.PathPrefix = "/"
+		}
+		out = append(out, rule)
 	}
-	return []config.RoutingRule{rule}
+	return out
 }
 
 func buildRule(f map[string]string) config.RoutingRule {
