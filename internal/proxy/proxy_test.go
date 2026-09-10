@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/basili4-1982/api-gateway/internal/config"
 	"github.com/basili4-1982/api-gateway/internal/jwtutil"
@@ -179,4 +180,47 @@ func TestRouteLookup(t *testing.T) {
 
 	_ = targetSrv
 	_ = targetSrv2
+}
+
+func TestReload_RecreatesTargetWhenURLChanges(t *testing.T) {
+	cfg := &config.Config{
+		Targets: []config.TargetConfig{
+			{Name: "svc", URL: "http://svc:9000", Timeout: 5 * time.Second},
+		},
+		Routing: config.RoutingConfig{Rules: []config.RoutingRule{
+			{PathPrefix: "/api", TargetName: "svc"},
+		}},
+	}
+	mp := &MultiProxy{
+		targets:     map[string]*TargetProxy{},
+		routeByRule: map[*config.RoutingRule]*RouteConfig{},
+		logger:      zap.NewNop(),
+	}
+	mp.config.Store(cfg)
+
+	old, err := mp.createTargetProxy(&cfg.Targets[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp.targets["svc"] = old
+
+	newCfg := &config.Config{
+		Targets: []config.TargetConfig{
+			{Name: "svc", URL: "http://svc:9999", Timeout: 5 * time.Second},
+		},
+		Routing: config.RoutingConfig{Rules: []config.RoutingRule{
+			{PathPrefix: "/api", TargetName: "svc"},
+		}},
+	}
+	if err := mp.Reload(newCfg); err != nil {
+		t.Fatal(err)
+	}
+
+	got := mp.targets["svc"]
+	if got == old {
+		t.Fatal("target proxy must be recreated when URL changes")
+	}
+	if got.targetURL.Host != "svc:9999" {
+		t.Errorf("target URL not updated: %s", got.targetURL.Host)
+	}
 }

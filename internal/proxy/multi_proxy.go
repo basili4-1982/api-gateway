@@ -766,11 +766,16 @@ func (mp *MultiProxy) Reload(cfg *config.Config) error {
 	mp.config.Store(cfg)
 
 	newTargets := make(map[string]*TargetProxy, len(cfg.Targets))
-	for _, targetCfg := range cfg.Targets {
-		if old, ok := oldTargets[targetCfg.Name]; ok {
+	for i := range cfg.Targets {
+		targetCfg := cfg.Targets[i]
+		if old, ok := oldTargets[targetCfg.Name]; ok && !targetChanged(old.config, &targetCfg) {
 			old.config = &targetCfg
 			newTargets[targetCfg.Name] = old
 			continue
+		} else if ok {
+			if old.healthCheck != nil {
+				close(old.healthCheck.stopCh)
+			}
 		}
 		tp, err := mp.createTargetProxy(&targetCfg)
 		if err != nil {
@@ -795,6 +800,16 @@ func (mp *MultiProxy) Reload(cfg *config.Config) error {
 		zap.Int("targets", len(newTargets)),
 	)
 	return nil
+}
+
+// targetChanged сообщает, изменились ли поля, влияющие на построенный прокси.
+func targetChanged(old, next *config.TargetConfig) bool {
+	if old == nil {
+		return true
+	}
+	return old.URL != next.URL ||
+		old.Timeout != next.Timeout ||
+		old.HealthCheck != next.HealthCheck
 }
 
 func (mp *MultiProxy) rebuildRouteConfigs(cfg *config.Config) {
