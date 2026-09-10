@@ -46,8 +46,12 @@ func (p *dockerProvider) Start(ctx context.Context, onResult func(Result)) error
 	triggers := make(chan struct{}, 1)
 	go p.watchEvents(ctx, triggers)
 
-	ticker := time.NewTicker(p.resync)
-	defer ticker.Stop()
+	var tickerC <-chan time.Time
+	if p.resync > 0 {
+		ticker := time.NewTicker(p.resync)
+		defer ticker.Stop()
+		tickerC = ticker.C
+	}
 
 	var timer *time.Timer
 	var timerC <-chan time.Time
@@ -71,7 +75,7 @@ func (p *dockerProvider) Start(ctx context.Context, onResult func(Result)) error
 		case <-timerC:
 			stopTimer()
 			p.sync(ctx, onResult)
-		case <-ticker.C:
+		case <-tickerC:
 			p.sync(ctx, onResult)
 		}
 	}
@@ -87,8 +91,16 @@ func (p *dockerProvider) sync(ctx context.Context, onResult func(Result)) {
 }
 
 // watchEvents подписывается на /events и шлёт триггер в triggers. При обрыве
-// переподключается с backoff до отмены ctx.
+// потока (закрытии или ошибке подписки) переподключается с backoff до отмены
+// ctx и сигнализирует о необходимости ре-синка: обрыв трактуется как
+// reconnect-and-resync, чтобы не ждать периодического тикера.
 func (p *dockerProvider) watchEvents(ctx context.Context, triggers chan<- struct{}) {
+	notify := func() {
+		select {
+		case triggers <- struct{}{}:
+		default:
+		}
+	}
 	backoff := time.Second
 	for {
 		if ctx.Err() != nil {
@@ -97,6 +109,7 @@ func (p *dockerProvider) watchEvents(ctx context.Context, triggers chan<- struct
 		ch, err := p.client.events(ctx)
 		if err != nil {
 			p.log.Warn("discovery: events subscribe failed", zap.Error(err))
+			notify()
 			if !sleepCtx(ctx, backoff) {
 				return
 			}
@@ -108,11 +121,9 @@ func (p *dockerProvider) watchEvents(ctx context.Context, triggers chan<- struct
 		backoff = time.Second
 		for action := range ch {
 			p.log.Debug("discovery: container event", zap.String("action", action))
-			select {
-			case triggers <- struct{}{}:
-			default:
-			}
+			notify()
 		}
+		notify()
 		if !sleepCtx(ctx, backoff) {
 			return
 		}
