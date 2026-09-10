@@ -64,10 +64,8 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	mgr, err := discovery.NewManager(cfg, log, func(updated *config.Config) {
-		if err := p.Reload(updated); err != nil {
-			log.Error("Failed to apply discovered config", zap.Error(err))
-		}
+	mgr, err := discovery.NewManager(cfg, log, func(updated *config.Config) error {
+		return p.Reload(updated)
 	})
 	if err != nil {
 		log.Error("Failed to create discovery manager", zap.Error(err))
@@ -110,9 +108,9 @@ func main() {
 					log.Error("Failed to reload config", zap.Error(err))
 					continue
 				}
-				if err := p.Reload(newCfg); err != nil {
-					log.Error("Failed to apply reloaded config", zap.Error(err))
-				}
+				// SetBase — единственный путь: он пересобирает конфиг с последним
+				// discovery-результатом и сам вызывает Reload (работает и при
+				// выключенном discovery), поэтому отдельный p.Reload не нужен.
 				mgr.SetBase(newCfg)
 			default:
 				log.Info("Received shutdown signal", zap.String("signal", sig.String()))

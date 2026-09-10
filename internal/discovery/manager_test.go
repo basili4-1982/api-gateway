@@ -21,7 +21,7 @@ func TestManager_MergesBaseAndDiscovered(t *testing.T) {
 	}
 
 	updates := make(chan *config.Config, 10)
-	m, err := NewManager(base, zap.NewNop(), func(c *config.Config) { updates <- c })
+	m, err := NewManager(base, zap.NewNop(), func(c *config.Config) error { updates <- c; return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestManager_NoDuplicateUpdateForSameResult(t *testing.T) {
 		Targets: []config.TargetConfig{{Name: "static", URL: "http://static:1"}},
 	}
 	updates := atomic.Int64{}
-	m, _ := NewManager(base, zap.NewNop(), func(*config.Config) { updates.Add(1) })
+	m, _ := NewManager(base, zap.NewNop(), func(*config.Config) error { updates.Add(1); return nil })
 	m.setProvider(repeatProvider{result: Result{}, times: 3})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -77,6 +77,107 @@ func (s stubProvider) Start(ctx context.Context, onResult func(Result)) error {
 }
 
 func (s stubProvider) Stop() error { return nil }
+
+// TestManager_RetriesFailedUpdate проверяет, что неуспешный onUpdate не
+// фиксируется как применённый и повторяется при следующем синке.
+func TestManager_RetriesFailedUpdate(t *testing.T) {
+	base := &config.Config{
+		Targets: []config.TargetConfig{{Name: "static", URL: "http://static:1"}},
+	}
+	var calls atomic.Int64
+	m, err := NewManager(base, zap.NewNop(), func(*config.Config) error {
+		if calls.Add(1) == 1 {
+			return fmt.Errorf("reload failed")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	res := Result{
+		Targets: []config.TargetConfig{{Name: "svc", URL: "http://svc:9000"}},
+		Rules:   []config.RoutingRule{{PathPrefix: "/api/svc", TargetName: "svc"}},
+	}
+	m.onResult(res)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("expected first update attempt, got %d calls", got)
+	}
+	// Тот же результат: первая попытка упала, значит должна быть повторена.
+	m.onResult(res)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("failed update must be retried, got %d calls", got)
+	}
+	// После успеха повтор того же результата не дёргает колбэк.
+	m.onResult(res)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("no update expected after success, got %d calls", got)
+	}
+}
+
+// TestManager_ApplyUsesLatestResult доказывает, что apply читает base/last под
+// m.mu в момент применения: снимок, сделанный SetBase до входа в apply, может
+// оказаться устаревшим, если параллельно пришёл более свежий onResult.
+func TestManager_ApplyUsesLatestResult(t *testing.T) {
+	base1 := &config.Config{
+		Targets: []config.TargetConfig{{Name: "static", URL: "http://static:1"}},
+	}
+	delivered := make(chan *config.Config, 4)
+	m, err := NewManager(base1, zap.NewNop(), func(c *config.Config) error {
+		delivered <- c
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Удерживаем applyMu, чтобы SetBase обновил base, но не успел применить.
+	m.applyMu.Lock()
+	base2 := &config.Config{
+		Targets: []config.TargetConfig{{Name: "static2", URL: "http://static2:1"}},
+	}
+	done := make(chan struct{})
+	go func() {
+		m.SetBase(base2)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		m.mu.Lock()
+		got := m.base
+		m.mu.Unlock()
+		if got == base2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("SetBase did not update base")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// Пока apply заблокирован, discovery приносит более свежий результат.
+	m.mu.Lock()
+	m.last = Result{Targets: []config.TargetConfig{{Name: "svc", URL: "http://svc:1"}}}
+	m.mu.Unlock()
+	m.applyMu.Unlock()
+
+	select {
+	case got := <-delivered:
+		found := false
+		for _, tg := range got.Targets {
+			if tg.Name == "svc" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("delivered config must reflect latest discovery result: %+v", got.Targets)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no update delivered")
+	}
+	<-done
+}
 
 type repeatProvider struct {
 	result Result
@@ -108,10 +209,11 @@ func TestManager_ApplySerialized(t *testing.T) {
 	defer unblock()
 
 	var calls atomic.Int64
-	m, err := NewManager(base, zap.NewNop(), func(*config.Config) {
+	m, err := NewManager(base, zap.NewNop(), func(*config.Config) error {
 		calls.Add(1)
 		entered <- struct{}{}
 		<-release
+		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +271,7 @@ func TestManager_LastJSONMatchesLastDelivered(t *testing.T) {
 	var mu sync.Mutex
 	var delivered []string
 
-	m, err := NewManager(base, zap.NewNop(), func(c *config.Config) {
+	m, err := NewManager(base, zap.NewNop(), func(c *config.Config) error {
 		n := inFlight.Add(1)
 		for {
 			old := maxInFlight.Load()
@@ -184,6 +286,7 @@ func TestManager_LastJSONMatchesLastDelivered(t *testing.T) {
 			mu.Unlock()
 		}
 		inFlight.Add(-1)
+		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -242,7 +345,7 @@ func TestManager_StartTwiceIsNoop(t *testing.T) {
 	base := &config.Config{
 		Targets: []config.TargetConfig{{Name: "static", URL: "http://static:1"}},
 	}
-	m, err := NewManager(base, zap.NewNop(), func(*config.Config) {})
+	m, err := NewManager(base, zap.NewNop(), func(*config.Config) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,8 +377,49 @@ func TestManager_StartTwiceIsNoop(t *testing.T) {
 	_ = m.Stop()
 }
 
+// TestManager_StopIsTerminal проверяет, что после Stop менеджер не
+// перезапускает провайдер (терминальная семантика, согласованная с провайдером).
+func TestManager_StopIsTerminal(t *testing.T) {
+	base := &config.Config{
+		Targets: []config.TargetConfig{{Name: "static", URL: "http://static:1"}},
+	}
+	m, err := NewManager(base, zap.NewNop(), func(*config.Config) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &blockingProvider{entered: make(chan struct{})}
+	m.setProvider(p)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-p.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider did not start")
+	}
+
+	if err := m.Stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-p.entered:
+		t.Fatal("Start after Stop must not restart the provider")
+	case <-time.After(100 * time.Millisecond):
+	}
+	if got := p.calls.Load(); got != 1 {
+		t.Fatalf("provider Start called %d times, want 1", got)
+	}
+}
+
 func TestManager_NilConfigReturnsError(t *testing.T) {
-	m, err := NewManager(nil, zap.NewNop(), func(*config.Config) {})
+	m, err := NewManager(nil, zap.NewNop(), func(*config.Config) error { return nil })
 	if err == nil {
 		t.Fatal("expected error for nil config")
 	}

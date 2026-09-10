@@ -18,7 +18,7 @@ type Manager struct {
 	mu       sync.Mutex
 	base     *config.Config
 	provider Provider
-	onUpdate func(*config.Config)
+	onUpdate func(*config.Config) error
 	log      *zap.Logger
 	last     Result
 	lastJSON string
@@ -32,8 +32,10 @@ type Manager struct {
 }
 
 // NewManager создаёт менеджер discovery. Если discovery выключен — возвращает
-// менеджер с nil-провайдером (Start/Stop безопасны).
-func NewManager(cfg *config.Config, log *zap.Logger, onUpdate func(*config.Config)) (*Manager, error) {
+// менеджер с nil-провайдером (Start/Stop безопасны). onUpdate должен вернуть
+// ошибку, если применение конфига не удалось: тогда оно будет повторено при
+// следующем синке.
+func NewManager(cfg *config.Config, log *zap.Logger, onUpdate func(*config.Config) error) (*Manager, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("discovery: config is nil")
 	}
@@ -97,18 +99,18 @@ func (m *Manager) Start(ctx context.Context) error {
 func (m *Manager) SetBase(cfg *config.Config) {
 	m.mu.Lock()
 	m.base = cfg
-	result := m.last
 	m.mu.Unlock()
-	m.apply(result)
+	m.apply()
 }
 
-// Stop останавливает discovery.
+// Stop останавливает discovery. Остановка терминальна: dockerProvider.Stop
+// необратим (повторный Start провайдера — no-op), поэтому started не
+// сбрасывается и последующий Start менеджера тоже ничего не делает.
 func (m *Manager) Stop() error {
 	m.mu.Lock()
 	cancel := m.cancel
 	provider := m.provider
 	m.cancel = nil
-	m.started = false
 	m.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -123,18 +125,21 @@ func (m *Manager) onResult(result Result) {
 	m.mu.Lock()
 	m.last = result
 	m.mu.Unlock()
-	m.apply(result)
+	m.apply()
 }
 
-func (m *Manager) apply(result Result) {
+func (m *Manager) apply() {
 	// Сериализуем merge→validate→dedup→onUpdate целиком, чтобы SetBase (SIGHUP)
 	// и onResult (горутина провайдера) не перемешивали lastJSON и не вызывали
 	// onUpdate конкурентно. m.mu не удерживается во время колбэка.
 	m.applyMu.Lock()
 	defer m.applyMu.Unlock()
 
+	// base и last читаются под m.mu в момент применения, а не снимаются
+	// вызывающим: иначе устаревший снимок мог бы примениться последним.
 	m.mu.Lock()
 	base := m.base
+	result := m.last
 	m.mu.Unlock()
 
 	merged := config.Merge(base, result.Targets, result.Rules)
@@ -155,8 +160,15 @@ func (m *Manager) apply(result Result) {
 		m.mu.Unlock()
 		return
 	}
-	m.lastJSON = key
 	m.mu.Unlock()
 
-	m.onUpdate(merged)
+	if err := m.onUpdate(merged); err != nil {
+		// Не фиксируем lastJSON: следующий синк повторит применение.
+		m.log.Warn("discovery: onUpdate failed, will retry", zap.Error(err))
+		return
+	}
+
+	m.mu.Lock()
+	m.lastJSON = key
+	m.mu.Unlock()
 }
