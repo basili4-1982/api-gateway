@@ -150,3 +150,19 @@ logging:
   level: "debug"
   format: "console"
   # access_log: true              # построчный лог каждого запроса; выкл. по умолчанию (доп. расходы на запрос)
+
+# Service discovery (Docker/Podman по labels). Если enabled: true, targets и
+# routing.rules можно не заполнять — сервисы опишут себя labels'ами.
+discovery:
+  enabled: false
+  provider: docker            # docker | podman (один и тот же клиент)
+  host: "unix:///var/run/docker.sock"
+  api_version: "v1.41"        # "" = запросы без версии
+  label_prefix: "gateway"
+  service_name_labels:
+    - "com.docker.compose.service"
+    - "io.podman.compose.service"
+  network: ""
+  debounce: 500ms
+  resync_interval: 5m
+  default_timeout: 30s
