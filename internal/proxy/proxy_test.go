@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -223,4 +224,68 @@ func TestReload_RecreatesTargetWhenURLChanges(t *testing.T) {
 	if got.targetURL.Host != "svc:9999" {
 		t.Errorf("target URL not updated: %s", got.targetURL.Host)
 	}
+}
+
+func TestReload_KeepsOldTargetWhenReplacementFails(t *testing.T) {
+	cfg := &config.Config{
+		Targets: []config.TargetConfig{
+			{Name: "svc", URL: "http://svc:9000", Timeout: 5 * time.Second},
+		},
+		Routing: config.RoutingConfig{Rules: []config.RoutingRule{
+			{PathPrefix: "/api", TargetName: "svc"},
+		}},
+	}
+	mp := &MultiProxy{
+		targets:     map[string]*TargetProxy{},
+		routeByRule: map[*config.RoutingRule]*RouteConfig{},
+		logger:      zap.NewNop(),
+	}
+	mp.config.Store(cfg)
+
+	oldURL, err := url.Parse("http://svc:9000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := &TargetProxy{
+		config:      &cfg.Targets[0],
+		targetURL:   oldURL,
+		healthCheck: &HealthChecker{stopCh: make(chan struct{})},
+	}
+	mp.targets["svc"] = old
+
+	// Malformed URL makes createTargetProxy fail after targetChanged == true.
+	badCfg := &config.Config{
+		Targets: []config.TargetConfig{
+			{Name: "svc", URL: "http://[::1", Timeout: 5 * time.Second},
+		},
+		Routing: config.RoutingConfig{Rules: []config.RoutingRule{
+			{PathPrefix: "/api", TargetName: "svc"},
+		}},
+	}
+
+	if err := mp.Reload(badCfg); err == nil {
+		t.Fatal("expected reload to fail on malformed target URL")
+	}
+	if got := mp.targets["svc"]; got != old {
+		t.Fatal("old target must be kept when replacement creation fails")
+	}
+	select {
+	case <-old.healthCheck.stopCh:
+		t.Fatal("old healthcheck must not be stopped when replacement creation fails")
+	default:
+	}
+
+	// Повторный reload с той же ошибкой не должен паниковать (двойное закрытие).
+	if err := mp.Reload(badCfg); err == nil {
+		t.Fatal("expected second reload to fail on malformed target URL")
+	}
+}
+
+func TestHealthCheckerStop_Idempotent(t *testing.T) {
+	hc := &HealthChecker{stopCh: make(chan struct{})}
+	hc.Stop()
+	hc.Stop()
+
+	var nilHC *HealthChecker
+	nilHC.Stop()
 }

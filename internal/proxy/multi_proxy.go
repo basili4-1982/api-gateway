@@ -95,10 +95,19 @@ type MultiProxy struct {
 
 // HealthChecker проверяет здоровье таргета
 type HealthChecker struct {
-	url     string
-	period  time.Duration
-	timeout time.Duration
-	stopCh  chan struct{}
+	url      string
+	period   time.Duration
+	timeout  time.Duration
+	stopCh   chan struct{}
+	stopOnce sync.Once
+}
+
+// Stop останавливает горутину health check; повторные вызовы безопасны.
+func (hc *HealthChecker) Stop() {
+	if hc == nil {
+		return
+	}
+	hc.stopOnce.Do(func() { close(hc.stopCh) })
 }
 
 // NewMultiProxy создает новый мульти-прокси сервер
@@ -772,23 +781,20 @@ func (mp *MultiProxy) Reload(cfg *config.Config) error {
 			old.config = &targetCfg
 			newTargets[targetCfg.Name] = old
 			continue
-		} else if ok {
-			if old.healthCheck != nil {
-				close(old.healthCheck.stopCh)
-			}
 		}
 		tp, err := mp.createTargetProxy(&targetCfg)
 		if err != nil {
 			return fmt.Errorf("failed to create proxy for target %s: %w", targetCfg.Name, err)
+		}
+		if old, ok := oldTargets[targetCfg.Name]; ok {
+			old.healthCheck.Stop()
 		}
 		newTargets[targetCfg.Name] = tp
 	}
 
 	for name, old := range oldTargets {
 		if _, ok := newTargets[name]; !ok {
-			if old.healthCheck != nil {
-				close(old.healthCheck.stopCh)
-			}
+			old.healthCheck.Stop()
 		}
 	}
 
@@ -831,9 +837,7 @@ func (mp *MultiProxy) Stop(ctx context.Context) error {
 	mp.logger.Info("Stopping multi-proxy server")
 
 	for name, target := range mp.targets {
-		if target.healthCheck != nil {
-			close(target.healthCheck.stopCh)
-		}
+		target.healthCheck.Stop()
 		mp.logger.Debug("Stopped target", zap.String("target", name))
 	}
 
