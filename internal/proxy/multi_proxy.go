@@ -138,7 +138,7 @@ func NewMultiProxy(cfg *config.Config, logger *zap.Logger) (*MultiProxy, error) 
 	mp.tracerProvider, _ = NewTracerProvider("api-gateway", logger)
 
 	for _, targetCfg := range cfg.Targets {
-		targetProxy, err := mp.createTargetProxy(&targetCfg)
+		targetProxy, err := mp.createTargetProxy(&targetCfg, cfg.HealthCheck)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create proxy for target %s: %w", targetCfg.Name, err)
 		}
@@ -285,8 +285,9 @@ func (mp *MultiProxy) findRouteConfig(rule *config.RoutingRule) *RouteConfig {
 	return mp.routeByRule[rule]
 }
 
-// createTargetProxy создает прокси для одного таргета
-func (mp *MultiProxy) createTargetProxy(targetCfg *config.TargetConfig) (*TargetProxy, error) {
+// createTargetProxy создает прокси для одного таргета. healthCheckEnabled
+// передаётся явно, чтобы Reload мог строить новые прокси до подмены конфига.
+func (mp *MultiProxy) createTargetProxy(targetCfg *config.TargetConfig, healthCheckEnabled bool) (*TargetProxy, error) {
 	targetURL, err := url.Parse(targetCfg.URL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid target URL: %w", err)
@@ -309,7 +310,7 @@ func (mp *MultiProxy) createTargetProxy(targetCfg *config.TargetConfig) (*Target
 	}
 	tp.reverseProxy = mp.newReverseProxy(tp)
 
-	if targetCfg.HealthCheck != "" && mp.config.Load().HealthCheck {
+	if targetCfg.HealthCheck != "" && healthCheckEnabled {
 		tp.healthCheck = &HealthChecker{
 			url:     targetCfg.HealthCheck,
 			period:  30 * time.Second,
@@ -766,14 +767,17 @@ func (tp *TargetProxy) checkHealth(logger *zap.Logger, mp *MultiProxy) {
 	mp.metrics.SetTargetUp(tp.config.Name, healthy)
 }
 
-// Reload перезагружает конфигурацию и обновляет targets/routing
+// Reload перезагружает конфигурацию и обновляет targets/routing.
+//
+// Изменения применяются атомарно: все новые прокси строятся заранее, и только
+// если каждый создан успешно, подменяются config/targets/routeConfigs и
+// останавливаются старые healthcheck'и. При любой ошибке прежнее состояние
+// (конфиг, таргеты, правила, healthcheck'и) остаётся нетронутым.
 func (mp *MultiProxy) Reload(cfg *config.Config) error {
 	mp.mu.Lock()
 	defer mp.mu.Unlock()
 
 	oldTargets := mp.targets
-	mp.config.Store(cfg)
-
 	newTargets := make(map[string]*TargetProxy, len(cfg.Targets))
 	for i := range cfg.Targets {
 		targetCfg := cfg.Targets[i]
@@ -782,22 +786,29 @@ func (mp *MultiProxy) Reload(cfg *config.Config) error {
 			newTargets[targetCfg.Name] = old
 			continue
 		}
-		tp, err := mp.createTargetProxy(&targetCfg)
+		tp, err := mp.createTargetProxy(&targetCfg, cfg.HealthCheck)
 		if err != nil {
+			// Откат: останавливаем healthcheck'и уже пересозданных прокси,
+			// чтобы не течь горутинами, но не трогаем старые.
+			for name, created := range newTargets {
+				if old, ok := oldTargets[name]; ok && old == created {
+					continue
+				}
+				created.healthCheck.Stop()
+			}
 			return fmt.Errorf("failed to create proxy for target %s: %w", targetCfg.Name, err)
-		}
-		if old, ok := oldTargets[targetCfg.Name]; ok {
-			old.healthCheck.Stop()
 		}
 		newTargets[targetCfg.Name] = tp
 	}
 
+	// Все новые прокси готовы — можно безопасно остановить вытесненные.
 	for name, old := range oldTargets {
-		if _, ok := newTargets[name]; !ok {
+		if next, ok := newTargets[name]; !ok || next != old {
 			old.healthCheck.Stop()
 		}
 	}
 
+	mp.config.Store(cfg)
 	mp.targets = newTargets
 	mp.rebuildRouteConfigs(cfg)
 	mp.reloadGlobalLimiter(cfg)

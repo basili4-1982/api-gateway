@@ -78,6 +78,18 @@ targets:
 	}
 }
 
+func TestLoad_RejectsMalformedTargetURL(t *testing.T) {
+	yaml := `
+targets:
+  - name: "bad"
+    url: "http://[::1"
+`
+	path := writeTempConfig(t, yaml)
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for malformed target URL")
+	}
+}
+
 func TestFindTargetForPath_LongestPrefix(t *testing.T) {
 	yaml := `
 targets:

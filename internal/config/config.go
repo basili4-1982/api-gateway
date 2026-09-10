@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -322,6 +323,8 @@ func (c *Config) setDefaults() {
 		}
 	}
 
+	// Дефолты discovery применяются, только когда discovery включён; пустая
+	// секция `discovery:` с `enabled: true` получает все значения ниже.
 	if c.Discovery != nil && c.Discovery.Enabled {
 		d := c.Discovery
 		if d.Provider == "" {
@@ -386,6 +389,9 @@ func (c *Config) validate() error {
 
 		if target.URL == "" {
 			return fmt.Errorf("target.url is required for target %s", target.Name)
+		}
+		if _, err := url.Parse(target.URL); err != nil {
+			return fmt.Errorf("target.url is invalid for target %s: %w", target.Name, err)
 		}
 	}
 
