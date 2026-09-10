@@ -1,8 +1,11 @@
 package discovery
 
 import (
+	"reflect"
 	"testing"
 	"time"
+
+	"github.com/basili4-1982/api-gateway/internal/config"
 )
 
 func testOpts() ParseOptions {
@@ -186,5 +189,98 @@ func TestParseTarget_NoRouteSkipped(t *testing.T) {
 
 	if len(res.Targets) != 0 {
 		t.Fatalf("target without any route must be skipped, got %+v", res.Targets)
+	}
+}
+
+func TestParseTarget_RouterFields(t *testing.T) {
+	stripFalse := false
+	stripTrue := true
+
+	tests := []struct {
+		name  string
+		extra map[string]string
+		want  config.RoutingRule
+	}{
+		{
+			name:  "methods trimmed and split",
+			extra: map[string]string{"gateway.methods": "GET, POST , DELETE"},
+			want:  config.RoutingRule{Host: "x", PathPrefix: "/", Methods: []string{"GET", "POST", "DELETE"}},
+		},
+		{
+			name:  "strip_path true",
+			extra: map[string]string{"gateway.strip_path": "true"},
+			want:  config.RoutingRule{Host: "x", PathPrefix: "/", StripPath: true},
+		},
+		{
+			name:  "auth required true",
+			extra: map[string]string{"gateway.auth.required": "true"},
+			want:  config.RoutingRule{Host: "x", PathPrefix: "/", Auth: &config.AuthRule{Required: true}},
+		},
+		{
+			name:  "auth roles split",
+			extra: map[string]string{"gateway.auth.roles": "admin, user"},
+			want:  config.RoutingRule{Host: "x", PathPrefix: "/", Auth: &config.AuthRule{Roles: []string{"admin", "user"}}},
+		},
+		{
+			name:  "auth strip_token false",
+			extra: map[string]string{"gateway.auth.strip_token": "false"},
+			want:  config.RoutingRule{Host: "x", PathPrefix: "/", Auth: &config.AuthRule{StripToken: &stripFalse}},
+		},
+		{
+			name: "auth required and strip_token true",
+			extra: map[string]string{
+				"gateway.auth.required":    "true",
+				"gateway.auth.strip_token": "true",
+			},
+			want: config.RoutingRule{Host: "x", PathPrefix: "/", Auth: &config.AuthRule{Required: true, StripToken: &stripTrue}},
+		},
+		{
+			name: "rate limit rps and burst",
+			extra: map[string]string{
+				"gateway.rate_limit.rps":   "12.5",
+				"gateway.rate_limit.burst": "20",
+			},
+			want: config.RoutingRule{Host: "x", PathPrefix: "/", RateLimit: &config.RateLimitRule{RequestsPerSecond: 12.5, Burst: 20}},
+		},
+		{
+			name:  "rate limit rps only leaves burst zero",
+			extra: map[string]string{"gateway.rate_limit.rps": "3"},
+			want:  config.RoutingRule{Host: "x", PathPrefix: "/", RateLimit: &config.RateLimitRule{RequestsPerSecond: 3, Burst: 0}},
+		},
+		{
+			name:  "rate limit invalid rps yields nil",
+			extra: map[string]string{"gateway.rate_limit.rps": "not-a-number"},
+			want:  config.RoutingRule{Host: "x", PathPrefix: "/"},
+		},
+		{
+			name:  "path_prefix used as-is",
+			extra: map[string]string{"gateway.path_prefix": "/api/v1"},
+			want:  config.RoutingRule{Host: "x", PathPrefix: "/api/v1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			labels := map[string]string{
+				"gateway.enable": "true",
+				"gateway.name":   "svc",
+				"gateway.port":   "9000",
+				"gateway.host":   "x",
+			}
+			for k, v := range tt.extra {
+				labels[k] = v
+			}
+
+			res := ParseContainers([]Container{{ID: "c1", Labels: labels}}, testOpts())
+			if len(res.Rules) != 1 {
+				t.Fatalf("expected 1 rule, got %d: %+v", len(res.Rules), res.Rules)
+			}
+
+			want := tt.want
+			want.TargetName = "svc"
+			if !reflect.DeepEqual(res.Rules[0], want) {
+				t.Fatalf("rule mismatch:\n got %+v\nwant %+v", res.Rules[0], want)
+			}
+		})
 	}
 }
