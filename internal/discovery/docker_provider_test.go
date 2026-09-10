@@ -16,8 +16,8 @@ func TestDockerProvider_InitialSyncAndEventResync(t *testing.T) {
 	listCalls := 0
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v1.41/containers/json":
+		switch r.URL.Path {
+		case "/v1.41/containers/json":
 			mu.Lock()
 			listCalls++
 			mu.Unlock()
@@ -27,7 +27,7 @@ func TestDockerProvider_InitialSyncAndEventResync(t *testing.T) {
 				"Labels":{"gateway.enable":"true","gateway.name":"svc","gateway.port":"9000","gateway.path_prefix":"/api/svc"},
 				"Ports":[{"PrivatePort":9000,"Type":"tcp"}]
 			}]`))
-		case r.URL.Path == "/v1.41/events":
+		case "/v1.41/events":
 			w.Header().Set("Content-Type", "application/json")
 			flusher, _ := w.(http.Flusher)
 			_, _ = w.Write([]byte(`{"Type":"container","Action":"start","id":"abc"}` + "\n"))
@@ -84,8 +84,8 @@ func TestDockerProvider_ResyncsOnEventsStreamClose(t *testing.T) {
 	listCalls := 0
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v1.41/containers/json":
+		switch r.URL.Path {
+		case "/v1.41/containers/json":
 			mu.Lock()
 			listCalls++
 			mu.Unlock()
@@ -95,7 +95,7 @@ func TestDockerProvider_ResyncsOnEventsStreamClose(t *testing.T) {
 				"Labels":{"gateway.enable":"true","gateway.name":"svc","gateway.port":"9000","gateway.path_prefix":"/api/svc"},
 				"Ports":[{"PrivatePort":9000,"Type":"tcp"}]
 			}]`))
-		case r.URL.Path == "/v1.41/events":
+		case "/v1.41/events":
 			// Поток событий закрывается сразу без событий — обрыв должен
 			// трактоваться как reconnect-and-resync.
 			w.Header().Set("Content-Type", "application/json")
@@ -137,11 +137,11 @@ func TestDockerProvider_ResyncsOnEventsStreamClose(t *testing.T) {
 
 func TestDockerProvider_NonPositiveResyncDoesNotPanic(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v1.41/containers/json":
+		switch r.URL.Path {
+		case "/v1.41/containers/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[]`))
-		case r.URL.Path == "/v1.41/events":
+		case "/v1.41/events":
 			w.Header().Set("Content-Type", "application/json")
 			<-r.Context().Done()
 		default:
@@ -209,11 +209,11 @@ func TestDockerProvider_StopWaitsForCallback(t *testing.T) {
 	var once sync.Once
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v1.41/containers/json":
+		switch r.URL.Path {
+		case "/v1.41/containers/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[]`))
-		case r.URL.Path == "/v1.41/events":
+		case "/v1.41/events":
 			w.Header().Set("Content-Type", "application/json")
 			<-r.Context().Done()
 		default:
@@ -266,11 +266,11 @@ func TestDockerProvider_StopWaitsForCallback(t *testing.T) {
 
 func TestDockerProvider_StopBeforeStart(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v1.41/containers/json":
+		switch r.URL.Path {
+		case "/v1.41/containers/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[]`))
-		case r.URL.Path == "/v1.41/events":
+		case "/v1.41/events":
 			w.Header().Set("Content-Type", "application/json")
 			<-r.Context().Done()
 		default:
@@ -319,11 +319,11 @@ func TestDockerProvider_BackoffGrowsOnCleanClose(t *testing.T) {
 	conns := 0
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/v1.41/containers/json":
+		switch r.URL.Path {
+		case "/v1.41/containers/json":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[]`))
-		case r.URL.Path == "/v1.41/events":
+		case "/v1.41/events":
 			mu.Lock()
 			conns++
 			mu.Unlock()
