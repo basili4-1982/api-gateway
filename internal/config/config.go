@@ -354,6 +354,11 @@ func (c *Config) setDefaults() {
 	}
 }
 
+// Validate проверяет корректность конфигурации (публичная обёртка для discovery).
+func (c *Config) Validate() error {
+	return c.validate()
+}
+
 // validate проверяет корректность конфигурации
 func (c *Config) validate() error {
 	discoveryEnabled := c.Discovery != nil && c.Discovery.Enabled
