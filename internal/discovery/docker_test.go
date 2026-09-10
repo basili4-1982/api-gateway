@@ -43,6 +43,25 @@ func TestDockerClient_ListContainers(t *testing.T) {
 	}
 }
 
+func TestDockerClient_UnknownScheme(t *testing.T) {
+	if _, err := newDockerClient("tcp://1.2.3.4:2375", ""); err == nil {
+		t.Fatal("expected error for unsupported scheme tcp://")
+	}
+}
+
+func TestDockerClient_UnixSocket(t *testing.T) {
+	c, err := newDockerClient("unix:///var/run/docker.sock", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.baseURL != "http://docker" {
+		t.Fatalf("unexpected baseURL for unix host: %q", c.baseURL)
+	}
+	if c.http.Transport == nil {
+		t.Fatal("expected custom transport for unix socket")
+	}
+}
+
 func TestDockerClient_NoGlobalTimeout(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	defer srv.Close()
