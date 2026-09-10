@@ -427,3 +427,23 @@ func TestParseRouters_AuthStripToken(t *testing.T) {
 		t.Errorf("strip_token should be true, got %+v", res.Rules[0].Auth.StripToken)
 	}
 }
+
+func TestParseRouters_NamedDefaultOverridesShort(t *testing.T) {
+	res := ParseContainers([]Container{{
+		ID: "c1",
+		Labels: map[string]string{
+			"gateway.enable":                     "true",
+			"gateway.name":                       "svc",
+			"gateway.port":                       "9000",
+			"gateway.path_prefix":                "/short",
+			"gateway.router.default.path_prefix": "/named",
+		},
+	}}, testOpts())
+
+	if len(res.Rules) != 1 {
+		t.Fatalf("expected 1 rule, got %d", len(res.Rules))
+	}
+	if res.Rules[0].PathPrefix != "/named" {
+		t.Errorf("named default router must override short form: got %q", res.Rules[0].PathPrefix)
+	}
+}

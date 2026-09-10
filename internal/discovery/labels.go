@@ -165,34 +165,42 @@ var routerFields = map[string]bool{
 
 // parseRouters собирает роутеры из labels. Короткая форма "<prefix>.<field>"
 // даёт роутер "default"; именованная "<prefix>.router.<id>.<field>" — роутер id.
+// Для роутера "default" именованная форма переопределяет короткую.
 // Роутеры сортируются по id для детерминированного порядка.
 func parseRouters(labels map[string]string, prefix string) []config.RoutingRule {
 	shortPrefix := prefix + "."
 	routerPrefix := prefix + ".router."
 	fields := make(map[string]map[string]string)
 
-	for k, v := range labels {
-		switch {
-		case strings.HasPrefix(k, routerPrefix):
-			rest := strings.TrimPrefix(k, routerPrefix)
-			id, field, ok := strings.Cut(rest, ".")
-			if !ok || id == "" || !routerFields[field] {
-				continue
-			}
-			if fields[id] == nil {
-				fields[id] = map[string]string{}
-			}
-			fields[id][field] = v
-		case strings.HasPrefix(k, shortPrefix):
-			field := strings.TrimPrefix(k, shortPrefix)
-			if !routerFields[field] {
-				continue
-			}
-			if fields["default"] == nil {
-				fields["default"] = map[string]string{}
-			}
-			fields["default"][field] = v
+	setField := func(id, field, v string) {
+		if fields[id] == nil {
+			fields[id] = map[string]string{}
 		}
+		fields[id][field] = v
+	}
+
+	// Сначала короткая форма — база для роутера "default".
+	for k, v := range labels {
+		if !strings.HasPrefix(k, shortPrefix) {
+			continue
+		}
+		field := strings.TrimPrefix(k, shortPrefix)
+		if routerFields[field] {
+			setField("default", field, v)
+		}
+	}
+
+	// Затем именованная форма — переопределяет короткую для совпавших полей.
+	for k, v := range labels {
+		if !strings.HasPrefix(k, routerPrefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(k, routerPrefix)
+		id, field, ok := strings.Cut(rest, ".")
+		if !ok || id == "" || !routerFields[field] {
+			continue
+		}
+		setField(id, field, v)
 	}
 
 	ids := make([]string, 0, len(fields))
