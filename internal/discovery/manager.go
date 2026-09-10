@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 
 	"github.com/basili4-1982/api-gateway/internal/config"
@@ -12,6 +13,8 @@ import (
 // Manager связывает провайдер discovery со статическим конфигом: мёржит их и
 // вызывает onUpdate только когда итоговый конфиг изменился.
 type Manager struct {
+	// mu защищает поля состояния менеджера. Не удерживается во время вызова
+	// onUpdate (иначе Stop из колбэка приведёт к самоблокировке).
 	mu       sync.Mutex
 	base     *config.Config
 	provider Provider
@@ -20,11 +23,20 @@ type Manager struct {
 	last     Result
 	lastJSON string
 	cancel   context.CancelFunc
+	started  bool
+
+	// applyMu сериализует всю последовательность merge→validate→dedup→onUpdate,
+	// чтобы onUpdate вызывался строго по одному и по порядку, а lastJSON всегда
+	// соответствовал последнему доставленному конфигу.
+	applyMu sync.Mutex
 }
 
 // NewManager создаёт менеджер discovery. Если discovery выключен — возвращает
 // менеджер с nil-провайдером (Start/Stop безопасны).
 func NewManager(cfg *config.Config, log *zap.Logger, onUpdate func(*config.Config)) (*Manager, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("discovery: config is nil")
+	}
 	m := &Manager{base: cfg, onUpdate: onUpdate, log: log}
 	if cfg.Discovery == nil || !cfg.Discovery.Enabled {
 		return m, nil
@@ -55,17 +67,21 @@ func (m *Manager) setProvider(p Provider) {
 }
 
 // Start запускает discovery. Безопасно вызывать при выключенном discovery.
+// Повторный Start, пока провайдер уже запущен, — no-op.
 func (m *Manager) Start(ctx context.Context) error {
 	m.mu.Lock()
-	provider := m.provider
-	m.mu.Unlock()
-	if provider == nil {
+	if m.started {
+		m.mu.Unlock()
 		return nil
 	}
-
+	provider := m.provider
+	if provider == nil {
+		m.mu.Unlock()
+		return nil
+	}
 	ctx, cancel := context.WithCancel(ctx)
-	m.mu.Lock()
 	m.cancel = cancel
+	m.started = true
 	m.mu.Unlock()
 
 	go func() {
@@ -92,6 +108,7 @@ func (m *Manager) Stop() error {
 	cancel := m.cancel
 	provider := m.provider
 	m.cancel = nil
+	m.started = false
 	m.mu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -110,6 +127,12 @@ func (m *Manager) onResult(result Result) {
 }
 
 func (m *Manager) apply(result Result) {
+	// Сериализуем merge→validate→dedup→onUpdate целиком, чтобы SetBase (SIGHUP)
+	// и onResult (горутина провайдера) не перемешивали lastJSON и не вызывали
+	// onUpdate конкурентно. m.mu не удерживается во время колбэка.
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
+
 	m.mu.Lock()
 	base := m.base
 	m.mu.Unlock()
