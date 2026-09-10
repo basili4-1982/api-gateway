@@ -153,6 +153,8 @@ logging:
 
 # Service discovery (Docker/Podman по labels). Если enabled: true, targets и
 # routing.rules можно не заполнять — сервисы опишут себя labels'ами.
+# Дефолты ниже применяются при enabled: true; можно оставить только
+# `discovery: { enabled: true }` — остальные поля подставятся автоматически.
 discovery:
   enabled: false
   provider: docker            # docker | podman (один и тот же клиент)

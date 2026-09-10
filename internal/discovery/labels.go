@@ -72,7 +72,7 @@ func ParseContainers(containers []Container, opts ParseOptions) Result {
 			if strings.HasPrefix(health, "http://") || strings.HasPrefix(health, "https://") {
 				target.HealthCheck = health
 			} else {
-				target.HealthCheck = baseURL + health
+				target.HealthCheck = baseURL + "/" + strings.TrimPrefix(health, "/")
 			}
 		}
 
@@ -83,6 +83,18 @@ func ParseContainers(containers []Container, opts ParseOptions) Result {
 			res.Rules = append(res.Rules, routers[i])
 		}
 	}
+
+	// Детерминированный порядок: Docker может вернуть контейнеры в любом
+	// порядке, а стабильный JSON нужен, чтобы не дёргать Reload вхолостую.
+	sort.Slice(res.Targets, func(i, j int) bool {
+		return res.Targets[i].Name < res.Targets[j].Name
+	})
+	sort.SliceStable(res.Rules, func(i, j int) bool {
+		if res.Rules[i].Host != res.Rules[j].Host {
+			return res.Rules[i].Host < res.Rules[j].Host
+		}
+		return res.Rules[i].PathPrefix < res.Rules[j].PathPrefix
+	})
 
 	return res
 }
@@ -116,9 +128,15 @@ func targetPort(c Container, prefix string) (int, bool) {
 	}
 	ports := make(map[int]struct{})
 	for _, p := range c.Ports {
-		if p.PrivatePort > 0 {
-			ports[p.PrivatePort] = struct{}{}
+		if p.PrivatePort <= 0 {
+			continue
 		}
+		// Пустой Type считаем совместимым (тестовые фикстуры его опускают),
+		// иначе учитываем только TCP: UDP/SCTP не обслуживаются HTTP-прокси.
+		if p.Type != "" && p.Type != "tcp" {
+			continue
+		}
+		ports[p.PrivatePort] = struct{}{}
 	}
 	if len(ports) == 1 {
 		for p := range ports {
@@ -136,9 +154,11 @@ func labelValue(labels map[string]string, prefix, field string) string {
 	return labels[prefix+"."+field]
 }
 
+// parseBool разбирает булево значение label. Принимаются true/1/yes
+// (регистронезависимо, с обрезкой пробелов) — см. контракт labels в спецификации.
 func parseBool(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "true", "1", "yes", "on":
+	case "true", "1", "yes":
 		return true
 	default:
 		return false
@@ -151,16 +171,16 @@ func atoi(v string) int {
 }
 
 // routerFields — множество полей роутера, допустимых в labels.
-var routerFields = map[string]bool{
-	"host":             true,
-	"path_prefix":      true,
-	"methods":          true,
-	"strip_path":       true,
-	"auth.required":    true,
-	"auth.roles":       true,
-	"auth.strip_token": true,
-	"rate_limit.rps":   true,
-	"rate_limit.burst": true,
+var routerFields = map[string]struct{}{
+	"host":             {},
+	"path_prefix":      {},
+	"methods":          {},
+	"strip_path":       {},
+	"auth.required":    {},
+	"auth.roles":       {},
+	"auth.strip_token": {},
+	"rate_limit.rps":   {},
+	"rate_limit.burst": {},
 }
 
 // parseRouters собирает роутеры из labels. Короткая форма "<prefix>.<field>"
@@ -185,7 +205,7 @@ func parseRouters(labels map[string]string, prefix string) []config.RoutingRule 
 			continue
 		}
 		field := strings.TrimPrefix(k, shortPrefix)
-		if routerFields[field] {
+		if _, ok := routerFields[field]; ok {
 			setField("default", field, v)
 		}
 	}
@@ -197,7 +217,10 @@ func parseRouters(labels map[string]string, prefix string) []config.RoutingRule 
 		}
 		rest := strings.TrimPrefix(k, routerPrefix)
 		id, field, ok := strings.Cut(rest, ".")
-		if !ok || id == "" || !routerFields[field] {
+		if !ok || id == "" {
+			continue
+		}
+		if _, ok := routerFields[field]; !ok {
 			continue
 		}
 		setField(id, field, v)

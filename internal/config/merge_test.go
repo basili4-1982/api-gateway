@@ -65,6 +65,19 @@ func TestMerge_DoesNotMutateBase(t *testing.T) {
 	}
 }
 
+func TestMerge_DropsRuleForCollidingDiscoveredTarget(t *testing.T) {
+	got := Merge(baseCfg(),
+		[]TargetConfig{{Name: "static-api", URL: "http://other:1"}},
+		[]RoutingRule{{Host: "h", PathPrefix: "/collide", TargetName: "static-api"}},
+	)
+	if len(got.Routing.Rules) != 1 {
+		t.Fatalf("rule of colliding discovered target must be dropped, got %d rules", len(got.Routing.Rules))
+	}
+	if got.Routing.Rules[0].TargetName != "static-api" {
+		t.Errorf("only the static rule must remain, got %+v", got.Routing.Rules[0])
+	}
+}
+
 func TestMerge_DropsRuleForUnknownTarget(t *testing.T) {
 	got := Merge(baseCfg(), nil,
 		[]RoutingRule{{PathPrefix: "/x", TargetName: "ghost"}},

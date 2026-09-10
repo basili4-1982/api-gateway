@@ -1,6 +1,7 @@
 package discovery
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 	"time"
@@ -87,6 +88,23 @@ func TestParseTarget_ExplicitNameSchemeTimeoutHealth(t *testing.T) {
 	}
 }
 
+func TestParseTarget_HealthPathNormalized(t *testing.T) {
+	res := ParseContainers([]Container{{
+		ID: "c1",
+		Labels: map[string]string{
+			"gateway.enable": "true", "gateway.name": "svc", "gateway.port": "9000",
+			"gateway.health": "health", "gateway.host": "x",
+		},
+	}}, testOpts())
+
+	if len(res.Targets) != 1 {
+		t.Fatalf("expected 1 target, got %d", len(res.Targets))
+	}
+	if got := res.Targets[0].HealthCheck; got != "http://svc:9000/health" {
+		t.Errorf("health path must be normalized with a leading slash: got %q", got)
+	}
+}
+
 func TestParseTarget_FullHealthURLKept(t *testing.T) {
 	res := ParseContainers([]Container{{
 		ID: "c1",
@@ -125,6 +143,30 @@ func TestParseTarget_MultiplePortsSkipped(t *testing.T) {
 
 	if len(res.Targets) != 0 {
 		t.Fatalf("expected skip, got %+v", res.Targets)
+	}
+}
+
+func TestParseTarget_IgnoresNonTCPPorts(t *testing.T) {
+	res := ParseContainers([]Container{{
+		ID:     "c1",
+		Labels: map[string]string{"gateway.enable": "true", "gateway.name": "svc", "gateway.host": "x"},
+		Ports:  []Port{{PrivatePort: 9000, Type: "tcp"}, {PrivatePort: 9001, Type: "udp"}},
+	}}, testOpts())
+
+	if len(res.Targets) != 1 || res.Targets[0].URL != "http://svc:9000" {
+		t.Fatalf("expected single tcp port to win, got %+v", res.Targets)
+	}
+}
+
+func TestParseTarget_OnlyUDPPortSkipped(t *testing.T) {
+	res := ParseContainers([]Container{{
+		ID:     "c1",
+		Labels: map[string]string{"gateway.enable": "true", "gateway.name": "svc", "gateway.host": "x"},
+		Ports:  []Port{{PrivatePort: 9001, Type: "udp"}},
+	}}, testOpts())
+
+	if len(res.Targets) != 0 {
+		t.Fatalf("udp-only container must be skipped, got %+v", res.Targets)
 	}
 }
 
@@ -445,5 +487,49 @@ func TestParseRouters_NamedDefaultOverridesShort(t *testing.T) {
 	}
 	if res.Rules[0].PathPrefix != "/named" {
 		t.Errorf("named default router must override short form: got %q", res.Rules[0].PathPrefix)
+	}
+}
+
+// TestParseBool_AcceptedValues фиксирует документированный набор значений
+// (true/1/yes, регистронезависимо); on намеренно не принимается.
+func TestParseBool_AcceptedValues(t *testing.T) {
+	for _, v := range []string{"true", "TRUE", "True", "1", "yes", "YES"} {
+		if !parseBool(v) {
+			t.Errorf("parseBool(%q) = false, want true", v)
+		}
+	}
+	for _, v := range []string{"", "false", "0", "no", "on", "garbage"} {
+		if parseBool(v) {
+			t.Errorf("parseBool(%q) = true, want false", v)
+		}
+	}
+}
+
+// TestParseContainers_DeterministicOrder проверяет, что порядок контейнеров от
+// Docker не влияет на Result: targets сортируются по имени, rules — по host/path.
+func TestParseContainers_DeterministicOrder(t *testing.T) {
+	mk := func(order ...string) []Container {
+		byName := map[string]Container{
+			"a": {ID: "a", Labels: map[string]string{"gateway.enable": "true", "gateway.name": "a", "gateway.port": "9000", "gateway.path_prefix": "/a"}},
+			"b": {ID: "b", Labels: map[string]string{"gateway.enable": "true", "gateway.name": "b", "gateway.port": "9001", "gateway.path_prefix": "/b"}},
+			"c": {ID: "c", Labels: map[string]string{"gateway.enable": "true", "gateway.name": "c", "gateway.port": "9002", "gateway.path_prefix": "/c"}},
+		}
+		out := make([]Container, 0, len(order))
+		for _, n := range order {
+			out = append(out, byName[n])
+		}
+		return out
+	}
+
+	first, err := json.Marshal(ParseContainers(mk("a", "b", "c"), testOpts()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := json.Marshal(ParseContainers(mk("c", "b", "a"), testOpts()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(first) != string(second) {
+		t.Fatalf("ParseContainers output depends on container order:\n%s\n%s", first, second)
 	}
 }

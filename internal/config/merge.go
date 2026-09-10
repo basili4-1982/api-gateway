@@ -5,21 +5,26 @@ package config
 // существующим именем и правило с уже существующей парой (host, path_prefix)
 // пропускаются. Обнаруженные правила, ссылающиеся на неизвестный таргет,
 // отбрасываются.
+//
+// Merge копирует Config поверхностно: вложенные срезы и указатели (Targets,
+// Routing.Rules, TLS и т.п.) переиспользуются. Мутировать их на месте нельзя —
+// заменяйте на новые срезы, как это делается ниже.
 func Merge(base *Config, targets []TargetConfig, rules []RoutingRule) *Config {
 	merged := *base
 
 	merged.Targets = make([]TargetConfig, 0, len(base.Targets)+len(targets))
 	merged.Targets = append(merged.Targets, base.Targets...)
 
-	targetNames := make(map[string]bool, len(base.Targets))
+	staticNames := make(map[string]bool, len(base.Targets))
 	for _, t := range base.Targets {
-		targetNames[t.Name] = true
+		staticNames[t.Name] = true
 	}
+	discoveredNames := make(map[string]bool, len(targets))
 	for _, t := range targets {
-		if targetNames[t.Name] {
+		if staticNames[t.Name] || discoveredNames[t.Name] {
 			continue
 		}
-		targetNames[t.Name] = true
+		discoveredNames[t.Name] = true
 		merged.Targets = append(merged.Targets, t)
 	}
 
@@ -35,7 +40,10 @@ func Merge(base *Config, targets []TargetConfig, rules []RoutingRule) *Config {
 		if seenRules[key] {
 			continue
 		}
-		if !targetNames[r.TargetName] {
+		// Правило принимаем только если его таргет реально добавлен из discovery:
+		// при коллизии имени со статикой обнаруженный таргет отброшен, значит и
+		// его правила не должны маршрутизироваться на статику.
+		if !discoveredNames[r.TargetName] {
 			continue
 		}
 		seenRules[key] = true
