@@ -31,6 +31,14 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return rw.ResponseWriter.Write(b)
 }
 
+// Flush пробрасывает flush к базовому writer — нужно для SSE (text/event-stream),
+// иначе потоковые ответы буферизуются и клиент не получает события.
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // generateRequestID возвращает короткий ID для трассировки/логов.
 // Не требует криптографической стойкости, поэтому используется быстрый
 // math/rand/v2 (без syscall на каждый вызов) вместо crypto/rand.
