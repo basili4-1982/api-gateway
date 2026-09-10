@@ -359,6 +359,9 @@ func (mp *MultiProxy) newReverseProxy(target *TargetProxy) *httputil.ReverseProx
 	return &httputil.ReverseProxy{
 		Transport:  target.transport,
 		BufferPool: sharedProxyBufferPool,
+		// Немедленный flush: необходимо для SSE (text/event-stream), иначе
+		// потоковые ответы буферизуются и клиент не получает события.
+		FlushInterval: -1,
 		Director: func(req *http.Request) {
 			req.URL.Scheme = target.targetURL.Scheme
 			req.URL.Host = target.targetURL.Host
