@@ -1,0 +1,49 @@
+# Пример: api-gateway с service discovery по labels (Docker/Podman).
+#
+# Сервисы описывают себя labels'ами, гейтвей находит их через Docker API
+# (socket монтируется read-only) и сам строит таргеты и роуты. Статический
+# targets/routing в api-gateway-config.yaml можно не заполнять — но если он
+# есть, при конфликте приоритет у статики (см. docs/service-discovery-migration.md).
+
+services:
+  api-gateway:
+    image: ghcr.io/sarnas-it/api-gateway:latest
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./api-gateway-config.yaml:/etc/proxy/config.yaml:ro
+      # read-only доступ к Docker API для service discovery
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - blog
+      - catalog
+    restart: unless-stopped
+
+  # Публичный роут без auth + админский с ролями и rate-limit.
+  blog:
+    image: ghcr.io/sarnas-it/blog:latest
+    labels:
+      gateway.enable: "true"
+      gateway.port: "8085"
+      gateway.health: "/health"
+      gateway.router.public.path_prefix: "/api/blog"
+      gateway.router.public.auth.required: "false"
+      gateway.router.admin.path_prefix: "/api/admin/blog"
+      gateway.router.admin.auth.required: "true"
+      gateway.router.admin.auth.roles: "admin"
+    expose:
+      - "8085"
+    restart: unless-stopped
+
+  # Один роут через короткую форму (роутер "default").
+  catalog:
+    image: ghcr.io/sarnas-it/catalog:latest
+    labels:
+      gateway.enable: "true"
+      gateway.port: "8084"
+      gateway.path_prefix: "/api/catalog"
+      gateway.auth.required: "true"
+    expose:
+      - "8084"
+    restart: unless-stopped
