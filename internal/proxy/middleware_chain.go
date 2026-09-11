@@ -21,11 +21,13 @@ import (
 type contextKey string
 
 const (
-	ctxKeyRequestIDs  contextKey = "request_ids"
-	ctxKeyTarget      contextKey = "target"
-	ctxKeyRule        contextKey = "rule"
-	ctxKeyTargetProxy contextKey = "target_proxy"
-	ctxKeyRequestBody contextKey = "request_body"
+	ctxKeyRequestIDs          contextKey = "request_ids"
+	ctxKeyTarget              contextKey = "target"
+	ctxKeyRule                contextKey = "rule"
+	ctxKeyTargetProxy         contextKey = "target_proxy"
+	ctxKeyRequestBody         contextKey = "request_body"
+	ctxKeyResponseBody        contextKey = "response_body"
+	ctxKeyResponseContentType contextKey = "response_content_type"
 )
 
 // requestIDs хранит request_id и trace_id одним значением контекста —
@@ -235,6 +237,11 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 		target, rule := mp.config.Load().FindTargetForPath(r.URL.Path, r.Method, r.Host)
 
 		rw := newResponseWriter(w)
+		// Захват тела ответа нужен только когда хотя бы один on_response вебхук
+		// запросил include_response_body (иначе — ноль накладных расходов).
+		if mp.publisher != nil && mp.publisher.CaptureResponseBodies() {
+			rw.enableCapture(defaultMaxResponseBodyBytes)
+		}
 
 		// Route
 		if target == nil {
@@ -316,6 +323,12 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 		}
 
 		mp.proxyRequest(rw, r, targetProxy, remainingPath)
+
+		// Передаём захваченное тело ответа издателю (on_response webhooks).
+		if body := rw.CapturedResponseBody(); body != nil {
+			r = r.WithContext(context.WithValue(r.Context(), ctxKeyResponseBody, body))
+			r = r.WithContext(context.WithValue(r.Context(), ctxKeyResponseContentType, rw.CapturedContentType()))
+		}
 
 		mp.metrics.IncRequests(r.Method, r.URL.Path, strconv.Itoa(rw.statusCode))
 		mp.metrics.ObserveDuration(r.Method, r.URL.Path, time.Since(startTime))

@@ -1,46 +1,48 @@
 # API Gateway
 
-Reverse proxy / API gateway with per-route JWT authentication, role-based access control, and rate limiting.
+Реверс-прокси / API-шлюз с JWT-аутентификацией по маршрутам, ролевым доступом и рейт-лимитингом.
 
-## Features
+## Возможности
 
-- **Path-based routing** to multiple microservices
-- **Per-route JWT authentication** — some routes require JWT, others are public
-- **Role-based access control** — check user roles from JWT claims per route
-- **Per-route rate limiting** — token bucket algorithm per IP
-- **Health checks** — automatic target health monitoring with circuit breaker
-- **CORS** — enabled in dev mode, disabled in production
-- **Claim-to-header mapping** — pass JWT claims as HTTP headers to backends
-- **Graceful shutdown** — wait for active requests to complete
-- **Structured logging** — console (dev) or JSON (prod) via Zap
+- **Маршрутизация по префиксу пути** на несколько бэкенд-сервисов, с поддержкой маршрутизации по `Host` (в т.ч. wildcard-домены `*.example.com`)
+- **JWT-аутентификация по маршруту** — часть маршрутов требует токен, часть публична
+- **Ролевой доступ** — проверка ролей пользователя из claims JWT для конкретного маршрута
+- **Rate limiting по маршруту** — token bucket на IP, плюс глобальный лимит
+- **Health checks и circuit breaker** — автоматическая проверка доступности таргетов, разрыв цепи только на ошибках транспорта
+- **CORS** — настраиваемый allowlist источников, отдельное поведение для dev-режима
+- **Basic Auth** — с constant-time сравнением хэшей, для служебных путей
+- **Проброс claims в заголовки** — маппинг полей JWT в HTTP-заголовки для бэкендов
+- **Раздача статики / SPA** — с fallback на `index.html` и поддержкой flat-HTML экспорта (Next.js)
+- **Вебхуки/NATS** — публикация событий `on_request`/`on_response`
+- **Graceful shutdown**, структурированное логирование (Zap), метрики, трейсинг (OpenTelemetry)
 
-## Quick Start
+## Быстрый старт
 
 ```bash
-# Copy config
+# Скопировать конфиг
 cp config.local.example.yaml config.local.yaml
-# Edit config.local.yaml with your services and JWT secret
+# Отредактировать config.local.yaml — указать свои сервисы и секрет для JWT
 
-# Run
+# Запуск
 go run ./cmd/ -config config.local.yaml
 ```
 
-## Configuration
+## Конфигурация
 
-See [`config.local.example.yaml`](config.local.example.yaml) for all options.
+Полный список опций — в [`config.local.example.yaml`](config.local.example.yaml).
 
-### Routes
+### Пример маршрутов
 
-| Path | Target | Auth | Roles |
+| Путь | Таргет | Auth | Роли |
 |---|---|---|---|
-| `POST /api/v1/auth/login` | auth-api | No | — |
-| `POST /api/v1/auth/register` | auth-api | No | — |
-| `POST /api/v1/auth/refresh` | auth-api | No | — |
-| `/api/v1/auth/*` | auth-api | Yes | — |
-| `/api/v1/client/*` | client-api | Yes | user, admin |
-| `/api/v1/admin/*` | admin-api | Yes | admin |
-| `/api/v1/storage/public/*` | storage-api | No | — |
-| `/api/v1/storage/*` | storage-api | Yes | — |
+| `POST /api/v1/auth/login` | auth-api | Нет | — |
+| `POST /api/v1/auth/register` | auth-api | Нет | — |
+| `POST /api/v1/auth/refresh` | auth-api | Нет | — |
+| `/api/v1/auth/*` | auth-api | Да | — |
+| `/api/v1/client/*` | client-api | Да | user, admin |
+| `/api/v1/admin/*` | admin-api | Да | admin |
+| `/api/v1/storage/public/*` | storage-api | Нет | — |
+| `/api/v1/storage/*` | storage-api | Да | — |
 
 ## Service discovery (Docker/Podman)
 
@@ -78,31 +80,22 @@ docker run -p 8080:8080 \
   api-gateway
 ```
 
-## Development
+## Разработка
 
 ```bash
-# Install dependencies
+# Установить зависимости
 go mod download
 
-# Run with local config
+# Запуск с локальным конфигом
 go run ./cmd/ -config config.local.yaml
 
-# Lint
+# Линт
 make lint
+
+# Тесты
+make test
 ```
 
-## Architecture
-
-```
-docs/obsidian/          # Obsidian vault with documentation
-├── API Gateway Architecture.md
-├── Routing Configuration.md
-├── JWT Authentication.md
-├── Rate Limiting.md
-├── Targets and Microservices.md
-└── Deployment.md
-```
-
-## License
+## Лицензия
 
 MIT
