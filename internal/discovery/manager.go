@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/basili4-1982/api-gateway/internal/config"
@@ -15,15 +17,16 @@ import (
 type Manager struct {
 	// mu защищает поля состояния менеджера. Не удерживается во время вызова
 	// onUpdate (иначе Stop из колбэка приведёт к самоблокировке).
-	mu       sync.Mutex
-	base     *config.Config
-	provider Provider
-	onUpdate func(*config.Config) error
-	log      *zap.Logger
-	last     Result
-	lastJSON string
-	cancel   context.CancelFunc
-	started  bool
+	mu        sync.Mutex
+	base      *config.Config
+	provider  Provider
+	onUpdate  func(*config.Config) error
+	log       *zap.Logger
+	last      Result
+	lastJSON  string
+	cancel    context.CancelFunc
+	started   bool
+	stateFile string
 
 	// applyMu сериализует всю последовательность merge→validate→dedup→onUpdate,
 	// чтобы onUpdate вызывался строго по одному и по порядку, а lastJSON всегда
@@ -44,6 +47,7 @@ func NewManager(cfg *config.Config, log *zap.Logger, onUpdate func(*config.Confi
 		return m, nil
 	}
 	d := cfg.Discovery
+	m.stateFile = d.StateFile
 	provider, err := newDockerProvider(
 		d.Host, d.APIVersion,
 		ParseOptions{
@@ -86,6 +90,13 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.started = true
 	m.mu.Unlock()
 
+	// Аварийный фолбэк: применяем последний сохранённый результат discovery,
+	// чтобы маршруты были доступны сразу, даже если Docker/Podman недоступен.
+	// Если провайдер затем успешно синхронизируется — состояние обновится.
+	if m.loadState() {
+		m.apply()
+	}
+
 	go func() {
 		if err := provider.Start(ctx, m.onResult); err != nil && ctx.Err() == nil {
 			m.log.Warn("discovery: provider stopped", zap.Error(err))
@@ -124,8 +135,68 @@ func (m *Manager) Stop() error {
 func (m *Manager) onResult(result Result) {
 	m.mu.Lock()
 	m.last = result
+	stateFile := m.stateFile
 	m.mu.Unlock()
+	m.saveState(stateFile, result)
 	m.apply()
+}
+
+// loadState читает последний сохранённый результат discovery из stateFile и
+// кладёт его в m.last. Возвращает true, если состояние удалось загрузить.
+// Ошибки/повреждённый файл не фатальны — просто нет фолбэка.
+func (m *Manager) loadState() bool {
+	m.mu.Lock()
+	stateFile := m.stateFile
+	m.mu.Unlock()
+	if stateFile == "" {
+		return false
+	}
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			m.log.Warn("discovery: read state file failed", zap.String("path", stateFile), zap.Error(err))
+		}
+		return false
+	}
+	var result Result
+	if err := json.Unmarshal(data, &result); err != nil {
+		m.log.Warn("discovery: state file corrupt, ignoring", zap.String("path", stateFile), zap.Error(err))
+		return false
+	}
+	m.mu.Lock()
+	m.last = result
+	m.mu.Unlock()
+	m.log.Info("discovery: loaded persisted state",
+		zap.String("path", stateFile),
+		zap.Int("targets", len(result.Targets)),
+		zap.Int("rules", len(result.Rules)),
+	)
+	return true
+}
+
+// saveState атомарно пишет результат discovery в stateFile (tmp + rename),
+// чтобы аварийный фолбэк пережил рестарт. Пустой путь отключает персист.
+func (m *Manager) saveState(stateFile string, result Result) {
+	if stateFile == "" {
+		return
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		m.log.Warn("discovery: marshal state failed", zap.Error(err))
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(stateFile), 0o755); err != nil {
+		m.log.Warn("discovery: create state dir failed", zap.String("path", stateFile), zap.Error(err))
+		return
+	}
+	tmp := stateFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		m.log.Warn("discovery: write state failed", zap.String("path", tmp), zap.Error(err))
+		return
+	}
+	if err := os.Rename(tmp, stateFile); err != nil {
+		m.log.Warn("discovery: rename state failed", zap.String("path", stateFile), zap.Error(err))
+	}
 }
 
 func (m *Manager) apply() {

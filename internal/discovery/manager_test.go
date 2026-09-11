@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -441,3 +443,118 @@ func (p *blockingProvider) Start(ctx context.Context, onResult func(Result)) err
 }
 
 func (p *blockingProvider) Stop() error { return nil }
+
+// TestManager_SaveAndLoadState проверяет атомарную запись и чтение состояния.
+func TestManager_SaveAndLoadState(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	m := &Manager{stateFile: stateFile, log: zap.NewNop()}
+	res := Result{
+		Targets: []config.TargetConfig{{Name: "svc", URL: "http://svc:9000"}},
+		Rules:   []config.RoutingRule{{PathPrefix: "/api/svc", TargetName: "svc"}},
+	}
+	m.saveState(stateFile, res)
+	m.loadState()
+
+	m.mu.Lock()
+	got := m.last
+	m.mu.Unlock()
+	if len(got.Targets) != 1 || got.Targets[0].Name != "svc" {
+		t.Fatalf("unexpected loaded state: %+v", got)
+	}
+	if len(got.Rules) != 1 || got.Rules[0].PathPrefix != "/api/svc" {
+		t.Fatalf("unexpected loaded rules: %+v", got.Rules)
+	}
+}
+
+// TestManager_LoadState_CorruptIgnored проверяет, что повреждённый файл
+// состояния не ломает менеджер — просто нет фолбэка.
+func TestManager_LoadState_CorruptIgnored(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(stateFile, []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{stateFile: stateFile, log: zap.NewNop()}
+	m.loadState()
+	m.mu.Lock()
+	got := m.last
+	m.mu.Unlock()
+	if len(got.Targets) != 0 {
+		t.Fatalf("corrupt state must be ignored, got %+v", got)
+	}
+}
+
+// TestManager_AppliesPersistedStateOnStart доказывает аварийный фолбэк: при
+// старте применяется последний сохранённый результат, даже если провайдер
+// ничего не приносит (Docker недоступен).
+func TestManager_AppliesPersistedStateOnStart(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	res := Result{Targets: []config.TargetConfig{{Name: "svc", URL: "http://svc:9000"}}}
+	data, err := json.Marshal(res)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stateFile, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	base := &config.Config{Discovery: &config.DiscoveryConfig{
+		Enabled:   true,
+		Provider:  "docker",
+		Host:      "unix:///var/run/docker.sock",
+		StateFile: stateFile,
+	}}
+	delivered := make(chan *config.Config, 4)
+	m, err := NewManager(base, zap.NewNop(), func(c *config.Config) error {
+		delivered <- c
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Провайдер блокируется и не приносит результатов — фолбэк должен сработать сам.
+	m.setProvider(&blockingProvider{entered: make(chan struct{})})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-delivered:
+		if len(got.Targets) != 1 || got.Targets[0].Name != "svc" {
+			t.Fatalf("persisted state not applied: %+v", got.Targets)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no update from persisted state")
+	}
+	_ = m.Stop()
+}
+
+// TestManager_PersistsResultOnOnResult проверяет, что каждый результат
+// discovery сохраняется в state_file.
+func TestManager_PersistsResultOnOnResult(t *testing.T) {
+	stateFile := filepath.Join(t.TempDir(), "state.json")
+	base := &config.Config{Targets: []config.TargetConfig{{Name: "static", URL: "http://static:1"}}}
+	m, err := NewManager(base, zap.NewNop(), func(*config.Config) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	m.stateFile = stateFile
+	m.mu.Unlock()
+
+	m.onResult(Result{Targets: []config.TargetConfig{{Name: "svc", URL: "http://svc:9000"}}})
+
+	data, err := os.ReadFile(stateFile)
+	if err != nil {
+		t.Fatalf("state file not written: %v", err)
+	}
+	var got Result
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Targets) != 1 || got.Targets[0].Name != "svc" {
+		t.Fatalf("state not persisted: %+v", got)
+	}
+}

@@ -168,3 +168,6 @@ discovery:
   debounce: 500ms
   resync_interval: 5m
   default_timeout: 30s
+  # Аварийный фолбэк: последний удачный результат discovery (маршруты переживают
+  # рестарт при недоступном Docker/Podman). "" отключает персист.
+  state_file: /var/lib/api-gateway/discovery-state.json

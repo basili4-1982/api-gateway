@@ -39,6 +39,10 @@ type DiscoveryConfig struct {
 	Debounce          time.Duration `yaml:"debounce"`
 	ResyncInterval    time.Duration `yaml:"resync_interval"`
 	DefaultTimeout    time.Duration `yaml:"default_timeout"`
+	// StateFile — путь к файлу с последним удачным результатом discovery
+	// (аварийный фолбэк: маршруты переживают рестарт при недоступном Docker).
+	// Пустая строка отключает персист.
+	StateFile string `yaml:"state_file"`
 }
 
 // TLSConfig конфигурация TLS с автосертификатами (Let's Encrypt)
@@ -370,6 +374,9 @@ func (c *Config) setDefaults() {
 		}
 		if d.DefaultTimeout == 0 {
 			d.DefaultTimeout = 30 * time.Second
+		}
+		if d.StateFile == "" {
+			d.StateFile = "/var/lib/api-gateway/discovery-state.json"
 		}
 	}
 }
