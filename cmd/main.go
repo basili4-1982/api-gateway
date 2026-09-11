@@ -4,6 +4,8 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/basili4-1982/api-gateway/internal/config"
+	"github.com/basili4-1982/api-gateway/internal/discovery"
 	"github.com/basili4-1982/api-gateway/internal/logger"
 	"github.com/basili4-1982/api-gateway/internal/proxy"
 )
@@ -19,6 +22,14 @@ import (
 func main() {
 	configPath := flag.String("config", "/etc/proxy/config.yaml", "path to config file")
 	flag.Parse()
+
+	// pprof — только если явно включён через env, наружу не слушает по умолчанию.
+	if addr := os.Getenv("PPROF_ADDR"); addr != "" {
+		go func() {
+			fmt.Fprintf(os.Stderr, "pprof listening on %s\n", addr)
+			fmt.Fprintln(os.Stderr, http.ListenAndServe(addr, nil))
+		}()
+	}
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -50,6 +61,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	mgr, err := discovery.NewManager(cfg, log, func(updated *config.Config) error {
+		return p.Reload(updated)
+	})
+	if err != nil {
+		log.Error("Failed to create discovery manager", zap.Error(err))
+		os.Exit(1)
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
@@ -61,6 +83,10 @@ func main() {
 			serverErrors <- err
 		}
 	}()
+
+	if err := mgr.Start(ctx); err != nil {
+		log.Error("Failed to start discovery", zap.Error(err))
+	}
 
 	log.Info("Multi-target JWT Proxy is running.",
 		zap.Int("port", cfg.Server.Port),
@@ -82,9 +108,10 @@ func main() {
 					log.Error("Failed to reload config", zap.Error(err))
 					continue
 				}
-				if err := p.Reload(newCfg); err != nil {
-					log.Error("Failed to apply reloaded config", zap.Error(err))
-				}
+				// SetBase — единственный путь: он пересобирает конфиг с последним
+				// discovery-результатом и сам вызывает Reload (работает и при
+				// выключенном discovery), поэтому отдельный p.Reload не нужен.
+				mgr.SetBase(newCfg)
 			default:
 				log.Info("Received shutdown signal", zap.String("signal", sig.String()))
 				goto shutdown
@@ -97,6 +124,10 @@ shutdown:
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+
+	if err := mgr.Stop(); err != nil {
+		log.Error("Error stopping discovery", zap.Error(err))
+	}
 
 	if err := p.Stop(shutdownCtx); err != nil {
 		log.Error("Error during shutdown", zap.Error(err))

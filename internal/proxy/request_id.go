@@ -2,11 +2,9 @@ package proxy
 
 import (
 	"bytes"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
-	"time"
 )
 
 type bodyCapture struct {
@@ -63,6 +61,14 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return rw.ResponseWriter.Write(b)
 }
 
+// Flush пробрасывает flush к базовому writer — нужно для SSE (text/event-stream),
+// иначе потоковые ответы буферизуются и клиент не получает события.
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // CapturedResponseBody возвращает захваченное тело ответа (nil, если сбор не
 // включён или тело пустое).
 func (rw *responseWriter) CapturedResponseBody() []byte {
@@ -81,11 +87,9 @@ func (rw *responseWriter) CapturedContentType() string {
 	return rw.capture.contentType
 }
 
+// generateRequestID возвращает короткий ID для трассировки/логов.
+// Не требует криптографической стойкости, поэтому используется быстрый
+// math/rand/v2 (без syscall на каждый вызов) вместо crypto/rand.
 func generateRequestID() string {
-	b := make([]byte, 8)
-	_, err := rand.Read(b)
-	if err != nil {
-		return fmt.Sprintf("%x", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(b)
+	return fmt.Sprintf("%016x", rand.Uint64())
 }

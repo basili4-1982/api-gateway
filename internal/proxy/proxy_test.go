@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
+	"time"
 
 	"github.com/basili4-1982/api-gateway/internal/config"
 	"github.com/basili4-1982/api-gateway/internal/jwtutil"
@@ -179,4 +181,178 @@ func TestRouteLookup(t *testing.T) {
 
 	_ = targetSrv
 	_ = targetSrv2
+}
+
+func TestReload_RecreatesTargetWhenURLChanges(t *testing.T) {
+	cfg := &config.Config{
+		Targets: []config.TargetConfig{
+			{Name: "svc", URL: "http://svc:9000", Timeout: 5 * time.Second},
+		},
+		Routing: config.RoutingConfig{Rules: []config.RoutingRule{
+			{PathPrefix: "/api", TargetName: "svc"},
+		}},
+	}
+	mp := &MultiProxy{
+		targets:     map[string]*TargetProxy{},
+		routeByRule: map[*config.RoutingRule]*RouteConfig{},
+		logger:      zap.NewNop(),
+	}
+	mp.config.Store(cfg)
+
+	old, err := mp.createTargetProxy(&cfg.Targets[0], false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mp.targets["svc"] = old
+
+	newCfg := &config.Config{
+		Targets: []config.TargetConfig{
+			{Name: "svc", URL: "http://svc:9999", Timeout: 5 * time.Second},
+		},
+		Routing: config.RoutingConfig{Rules: []config.RoutingRule{
+			{PathPrefix: "/api", TargetName: "svc"},
+		}},
+	}
+	if err := mp.Reload(newCfg); err != nil {
+		t.Fatal(err)
+	}
+
+	got := mp.targets["svc"]
+	if got == old {
+		t.Fatal("target proxy must be recreated when URL changes")
+	}
+	if got.targetURL.Host != "svc:9999" {
+		t.Errorf("target URL not updated: %s", got.targetURL.Host)
+	}
+}
+
+func TestReload_KeepsOldTargetWhenReplacementFails(t *testing.T) {
+	cfg := &config.Config{
+		Targets: []config.TargetConfig{
+			{Name: "svc", URL: "http://svc:9000", Timeout: 5 * time.Second},
+		},
+		Routing: config.RoutingConfig{Rules: []config.RoutingRule{
+			{PathPrefix: "/api", TargetName: "svc"},
+		}},
+	}
+	mp := &MultiProxy{
+		targets:     map[string]*TargetProxy{},
+		routeByRule: map[*config.RoutingRule]*RouteConfig{},
+		logger:      zap.NewNop(),
+	}
+	mp.config.Store(cfg)
+
+	oldURL, err := url.Parse("http://svc:9000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := &TargetProxy{
+		config:      &cfg.Targets[0],
+		targetURL:   oldURL,
+		healthCheck: &HealthChecker{stopCh: make(chan struct{})},
+	}
+	mp.targets["svc"] = old
+
+	// Malformed URL makes createTargetProxy fail after targetChanged == true.
+	badCfg := &config.Config{
+		Targets: []config.TargetConfig{
+			{Name: "svc", URL: "http://[::1", Timeout: 5 * time.Second},
+		},
+		Routing: config.RoutingConfig{Rules: []config.RoutingRule{
+			{PathPrefix: "/api", TargetName: "svc"},
+		}},
+	}
+
+	if err := mp.Reload(badCfg); err == nil {
+		t.Fatal("expected reload to fail on malformed target URL")
+	}
+	if got := mp.targets["svc"]; got != old {
+		t.Fatal("old target must be kept when replacement creation fails")
+	}
+	select {
+	case <-old.healthCheck.stopCh:
+		t.Fatal("old healthcheck must not be stopped when replacement creation fails")
+	default:
+	}
+
+	// Повторный reload с той же ошибкой не должен паниковать (двойное закрытие).
+	if err := mp.Reload(badCfg); err == nil {
+		t.Fatal("expected second reload to fail on malformed target URL")
+	}
+}
+
+// TestReload_MultiTargetFailureLeavesStateIntact проверяет атомарность Reload:
+// если создание одного из новых таргетов падает, старые config/targets/route
+// configs должны остаться нетронутыми, а healthcheck'и — не остановленными.
+func TestReload_MultiTargetFailureLeavesStateIntact(t *testing.T) {
+	oldCfg := &config.Config{
+		Targets: []config.TargetConfig{
+			{Name: "a", URL: "http://a:9000", Timeout: 5 * time.Second},
+			{Name: "b", URL: "http://b:9000", Timeout: 5 * time.Second},
+		},
+		Routing: config.RoutingConfig{Rules: []config.RoutingRule{
+			{PathPrefix: "/a", TargetName: "a", RateLimit: &config.RateLimitRule{RequestsPerSecond: 1, Burst: 1}},
+			{PathPrefix: "/b", TargetName: "b"},
+		}},
+	}
+	mp := &MultiProxy{
+		targets:     map[string]*TargetProxy{},
+		routeByRule: map[*config.RoutingRule]*RouteConfig{},
+		logger:      zap.NewNop(),
+	}
+	mp.config.Store(oldCfg)
+
+	oldA := &TargetProxy{config: &oldCfg.Targets[0], healthCheck: &HealthChecker{stopCh: make(chan struct{})}}
+	oldB := &TargetProxy{config: &oldCfg.Targets[1], healthCheck: &HealthChecker{stopCh: make(chan struct{})}}
+	mp.targets["a"] = oldA
+	mp.targets["b"] = oldB
+	mp.rebuildRouteConfigs(oldCfg)
+
+	oldRuleA := &oldCfg.Routing.Rules[0]
+	oldRC := mp.routeByRule[oldRuleA]
+	if oldRC == nil || oldRC.RateLimit == nil {
+		t.Fatal("test setup: expected route config with rate limit")
+	}
+
+	// Первый таргет меняет URL (будет пересоздан), второй — с битым URL (падение).
+	badCfg := &config.Config{
+		Targets: []config.TargetConfig{
+			{Name: "a", URL: "http://a:9999", Timeout: 5 * time.Second},
+			{Name: "b", URL: "http://[::1", Timeout: 5 * time.Second},
+		},
+		Routing: config.RoutingConfig{Rules: []config.RoutingRule{
+			{PathPrefix: "/a", TargetName: "a", RateLimit: &config.RateLimitRule{RequestsPerSecond: 99, Burst: 99}},
+			{PathPrefix: "/b", TargetName: "b"},
+		}},
+	}
+
+	if err := mp.Reload(badCfg); err == nil {
+		t.Fatal("expected reload to fail on malformed second target URL")
+	}
+
+	if mp.config.Load() != oldCfg {
+		t.Fatal("config must not be swapped on failed reload")
+	}
+	if mp.targets["a"] != oldA || mp.targets["b"] != oldB {
+		t.Fatal("targets must not be swapped on failed reload")
+	}
+	if mp.routeByRule[oldRuleA] != oldRC || mp.routeByRule[oldRuleA].RateLimit != oldRC.RateLimit {
+		t.Fatal("route configs must not be rebuilt on failed reload")
+	}
+	for name, old := range map[string]*TargetProxy{"a": oldA, "b": oldB} {
+		select {
+		case <-old.healthCheck.stopCh:
+			t.Fatalf("old healthcheck for target %s must not be stopped on failed reload", name)
+		default:
+		}
+	}
+}
+
+func TestHealthCheckerStop_Idempotent(t *testing.T) {
+	hc := &HealthChecker{stopCh: make(chan struct{})}
+	hc.Stop()
+	hc.Stop()
+
+	var nilHC *HealthChecker
+	nilHC.Stop()
 }

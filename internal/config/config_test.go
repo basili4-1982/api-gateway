@@ -78,6 +78,18 @@ targets:
 	}
 }
 
+func TestLoad_RejectsMalformedTargetURL(t *testing.T) {
+	yaml := `
+targets:
+  - name: "bad"
+    url: "http://[::1"
+`
+	path := writeTempConfig(t, yaml)
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for malformed target URL")
+	}
+}
+
 func TestFindTargetForPath_LongestPrefix(t *testing.T) {
 	yaml := `
 targets:
@@ -220,5 +232,99 @@ tls:
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for TLS without email")
+	}
+}
+
+func TestDiscovery_DefaultsApplied(t *testing.T) {
+	yaml := `
+discovery:
+  enabled: true
+`
+	path := writeTempConfig(t, yaml)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	d := cfg.Discovery
+	if d == nil || !d.Enabled {
+		t.Fatal("discovery should be enabled")
+	}
+	if d.Provider != "docker" {
+		t.Errorf("provider default: got %q", d.Provider)
+	}
+	if d.Host != "unix:///var/run/docker.sock" {
+		t.Errorf("host default: got %q", d.Host)
+	}
+	if d.APIVersion != "v1.41" {
+		t.Errorf("api_version default: got %q", d.APIVersion)
+	}
+	if d.LabelPrefix != "gateway" {
+		t.Errorf("label_prefix default: got %q", d.LabelPrefix)
+	}
+	if len(d.ServiceNameLabels) != 2 ||
+		d.ServiceNameLabels[0] != "com.docker.compose.service" ||
+		d.ServiceNameLabels[1] != "io.podman.compose.service" {
+		t.Errorf("service_name_labels default: got %v", d.ServiceNameLabels)
+	}
+	if d.Debounce != 500*time.Millisecond {
+		t.Errorf("debounce default: got %v", d.Debounce)
+	}
+	if d.ResyncInterval != 5*time.Minute {
+		t.Errorf("resync default: got %v", d.ResyncInterval)
+	}
+	if d.DefaultTimeout != 30*time.Second {
+		t.Errorf("default_timeout default: got %v", d.DefaultTimeout)
+	}
+}
+
+func TestDiscovery_AllowsEmptyTargetsWhenEnabled(t *testing.T) {
+	yaml := `
+targets: []
+discovery:
+  enabled: true
+`
+	path := writeTempConfig(t, yaml)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("empty targets must be allowed with discovery enabled: %v", err)
+	}
+	if len(cfg.Targets) != 0 {
+		t.Errorf("expected 0 targets, got %d", len(cfg.Targets))
+	}
+}
+
+func TestDiscovery_StillRequiresTargetsWhenDisabled(t *testing.T) {
+	yaml := `
+targets: []
+`
+	path := writeTempConfig(t, yaml)
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for empty targets without discovery")
+	}
+}
+
+func TestDiscovery_InvalidProvider(t *testing.T) {
+	yaml := `
+targets: []
+discovery:
+  enabled: true
+  provider: nomad
+`
+	path := writeTempConfig(t, yaml)
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for unknown provider")
+	}
+}
+
+func TestDiscovery_PodmanProviderAccepted(t *testing.T) {
+	yaml := `
+targets: []
+discovery:
+  enabled: true
+  provider: podman
+`
+	path := writeTempConfig(t, yaml)
+	if _, err := Load(path); err != nil {
+		t.Fatalf("podman provider must be accepted: %v", err)
 	}
 }

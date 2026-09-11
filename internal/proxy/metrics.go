@@ -8,7 +8,12 @@ import (
 	"time"
 )
 
+// Metrics собирает счётчики gateway. Когда enabled=false, все методы —
+// это дешёвый no-op (без аллокаций ключей и без обращений к expvar),
+// чтобы сбор метрик не стоил ничего на горячем пути, если он не включён
+// в конфиге (application.metrics_enabled).
 type Metrics struct {
+	enabled          bool
 	requestsTotal    *expvar.Map
 	requestDuration  *expvar.Map
 	rateLimitDenials *expvar.Int
@@ -17,32 +22,45 @@ type Metrics struct {
 	mu               sync.RWMutex
 }
 
-func NewMetrics() *Metrics {
-	m := &Metrics{
-		requestsTotal:    expvar.NewMap("gateway_requests_total"),
-		requestDuration:  expvar.NewMap("gateway_request_duration_ms"),
-		rateLimitDenials: expvar.NewInt("gateway_rate_limit_denials_total"),
-		targetUp:         expvar.NewMap("gateway_target_up"),
+func NewMetrics(enabled bool) *Metrics {
+	m := &Metrics{enabled: enabled}
+	if !enabled {
+		return m
 	}
+	m.requestsTotal = expvar.NewMap("gateway_requests_total")
+	m.requestDuration = expvar.NewMap("gateway_request_duration_ms")
+	m.rateLimitDenials = expvar.NewInt("gateway_rate_limit_denials_total")
+	m.targetUp = expvar.NewMap("gateway_target_up")
 	return m
 }
 
 func (m *Metrics) IncRequests(method, path, status string) {
-	key := fmt.Sprintf("%s:%s:%s", method, path, status)
+	if !m.enabled {
+		return
+	}
+	key := method + ":" + path + ":" + status
 	m.requestsTotal.Add(key, 1)
 }
 
 func (m *Metrics) ObserveDuration(method, path string, d time.Duration) {
-	key := fmt.Sprintf("%s:%s", method, path)
-	ms := d.Milliseconds()
-	m.requestDuration.Add(key, ms)
+	if !m.enabled {
+		return
+	}
+	key := method + ":" + path
+	m.requestDuration.Add(key, d.Milliseconds())
 }
 
 func (m *Metrics) IncRateLimitDenial() {
+	if !m.enabled {
+		return
+	}
 	m.rateLimitDenials.Add(1)
 }
 
 func (m *Metrics) SetTargetUp(name string, up bool) {
+	if !m.enabled {
+		return
+	}
 	val := int64(0)
 	if up {
 		val = 1
@@ -52,12 +70,18 @@ func (m *Metrics) SetTargetUp(name string, up bool) {
 }
 
 func (m *Metrics) IncActiveRequests() {
+	if !m.enabled {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.activeRequests++
 }
 
 func (m *Metrics) DecActiveRequests() {
+	if !m.enabled {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.activeRequests--

@@ -10,7 +10,7 @@ import (
 )
 
 func ctxRequest(r *httptest.ResponseRecorder, reqID string, reqBody, respBody []byte, ct string) context.Context {
-	c := context.WithValue(context.Background(), ctxKeyRequestID, reqID)
+	c := context.WithValue(context.Background(), ctxKeyRequestIDs, requestIDs{reqID: reqID, traceID: reqID})
 	if reqBody != nil {
 		c = context.WithValue(c, ctxKeyRequestBody, reqBody)
 	}
