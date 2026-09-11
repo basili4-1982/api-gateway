@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -23,6 +24,21 @@ type Config struct {
 	Routing     RoutingConfig     `yaml:"routing"`
 	Permissions PermissionsConfig `yaml:"permissions"`
 	Webhooks    []WebhookConfig   `yaml:"webhooks"`
+	Discovery   *DiscoveryConfig  `yaml:"discovery,omitempty"`
+}
+
+// DiscoveryConfig конфигурация service discovery (Docker/Podman по labels).
+type DiscoveryConfig struct {
+	Enabled           bool          `yaml:"enabled"`
+	Provider          string        `yaml:"provider"`
+	Host              string        `yaml:"host"`
+	APIVersion        string        `yaml:"api_version"`
+	LabelPrefix       string        `yaml:"label_prefix"`
+	ServiceNameLabels []string      `yaml:"service_name_labels"`
+	Network           string        `yaml:"network"`
+	Debounce          time.Duration `yaml:"debounce"`
+	ResyncInterval    time.Duration `yaml:"resync_interval"`
+	DefaultTimeout    time.Duration `yaml:"default_timeout"`
 }
 
 // TLSConfig конфигурация TLS с автосертификатами (Let's Encrypt)
@@ -54,6 +70,7 @@ type App struct {
 	Env               string   `yaml:"env"`
 	HealthCheck       bool     `yaml:"health_check"`
 	CircuitBreaker    bool     `yaml:"circuit_breaker"`
+	MetricsEnabled    bool     `yaml:"metrics_enabled"` // сбор метрик и /metrics эндпоинт; выкл. по умолчанию (доп. накладные расходы на запрос)
 	MetricsAllowedIPs []string `yaml:"metrics_allowed_ips"`
 }
 
@@ -208,8 +225,9 @@ func (w WebhookConfig) IncludeRequestBodyEnabled() bool {
 
 // LoggingConfig конфигурация логирования
 type LoggingConfig struct {
-	Level  string `yaml:"level"`  // debug, info, warn, error
-	Format string `yaml:"format"` // json или text
+	Level     string `yaml:"level"`      // debug, info, warn, error
+	Format    string `yaml:"format"`     // json или text
+	AccessLog bool   `yaml:"access_log"` // построчный лог каждого запроса; выкл. по умолчанию (аллокации на каждый запрос)
 }
 
 // Load загружает конфигурацию из файла
@@ -321,11 +339,57 @@ func (c *Config) setDefaults() {
 			}
 		}
 	}
+
+	// Дефолты discovery применяются, только когда discovery включён; пустая
+	// секция `discovery:` с `enabled: true` получает все значения ниже.
+	if c.Discovery != nil && c.Discovery.Enabled {
+		d := c.Discovery
+		if d.Provider == "" {
+			d.Provider = "docker"
+		}
+		if d.Host == "" {
+			d.Host = "unix:///var/run/docker.sock"
+		}
+		if d.APIVersion == "" {
+			d.APIVersion = "v1.41"
+		}
+		if d.LabelPrefix == "" {
+			d.LabelPrefix = "gateway"
+		}
+		if len(d.ServiceNameLabels) == 0 {
+			d.ServiceNameLabels = []string{
+				"com.docker.compose.service",
+				"io.podman.compose.service",
+			}
+		}
+		if d.Debounce == 0 {
+			d.Debounce = 500 * time.Millisecond
+		}
+		if d.ResyncInterval == 0 {
+			d.ResyncInterval = 5 * time.Minute
+		}
+		if d.DefaultTimeout == 0 {
+			d.DefaultTimeout = 30 * time.Second
+		}
+	}
+}
+
+// Validate проверяет корректность конфигурации (публичная обёртка для discovery).
+func (c *Config) Validate() error {
+	return c.validate()
 }
 
 // validate проверяет корректность конфигурации
 func (c *Config) validate() error {
-	if len(c.Targets) == 0 {
+	discoveryEnabled := c.Discovery != nil && c.Discovery.Enabled
+	if discoveryEnabled {
+		switch c.Discovery.Provider {
+		case "docker", "podman":
+		default:
+			return fmt.Errorf("discovery.provider must be docker or podman, got %q", c.Discovery.Provider)
+		}
+	}
+	if len(c.Targets) == 0 && !discoveryEnabled {
 		return fmt.Errorf("at least one target is required")
 	}
 
@@ -342,6 +406,9 @@ func (c *Config) validate() error {
 
 		if target.URL == "" {
 			return fmt.Errorf("target.url is required for target %s", target.Name)
+		}
+		if _, err := url.Parse(target.URL); err != nil {
+			return fmt.Errorf("target.url is invalid for target %s: %w", target.Name, err)
 		}
 	}
 
