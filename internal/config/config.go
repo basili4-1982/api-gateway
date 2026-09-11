@@ -204,6 +204,23 @@ type WebhookConfig struct {
 	OnStatusCodes []int            `yaml:"on_status_codes"`
 	ExcludePaths  []string         `yaml:"exclude_paths"`
 	Async         bool             `yaml:"async"`
+	// IncludeRequestBody — включать в событие тело запроса (поле changes).
+	// nil (не задано) = true: прежнее поведение (тело публиковалось всегда).
+	// Явное false выключает публикацию тела запроса для этого вебхука.
+	IncludeRequestBody *bool `yaml:"include_request_body"`
+	// IncludeResponseBody — включать в событие тело ответа (поле response_body).
+	// Тело собирается только для JSON-ответов и ограничено по размеру.
+	// По умолчанию выключено — включение настраивается явно.
+	IncludeResponseBody bool `yaml:"include_response_body"`
+}
+
+// IncludeRequestBodyEnabled возвращает эффективное значение include_request_body
+// (nil трактуется как true — обратная совместимость).
+func (w WebhookConfig) IncludeRequestBodyEnabled() bool {
+	if w.IncludeRequestBody == nil {
+		return true
+	}
+	return *w.IncludeRequestBody
 }
 
 // LoggingConfig конфигурация логирования

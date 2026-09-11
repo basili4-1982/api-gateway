@@ -16,7 +16,11 @@ if [[ -z "$REPO_NAME" ]]; then
   REMOTE=$(git remote get-url origin 2>/dev/null || echo "")
   REPO_NAME=$(echo "$REMOTE" | sed -n 's|.*github.com[:/]\(.*\)\.git|\1|p' | sed 's|.*/||')
 fi
-REPO_OWNER="${GITHUB_REPOSITORY_OWNER:-X-didgital}"
+REPO_OWNER="${GITHUB_REPOSITORY_OWNER:-}"
+if [[ -z "$REPO_OWNER" ]]; then
+  REMOTE=$(git remote get-url origin 2>/dev/null || echo "")
+  REPO_OWNER=$(echo "$REMOTE" | sed -n 's|.*github.com[:/]\([^/]*\)/.*|\1|p')
+fi
 [[ -z "$REPO_NAME" ]] && { echo "ERROR: cannot detect repo name"; exit 1; }
 
 HEAD_SHA=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
