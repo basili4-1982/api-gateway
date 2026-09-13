@@ -157,7 +157,8 @@ type RoutingRule struct {
 // AuthRule конфигурация аутентификации для роута
 type AuthRule struct {
 	Required   bool     `yaml:"required"`              // требовать ли JWT
-	Roles      []string `yaml:"roles,omitempty"`       // требуемые роли (опционально)
+	Roles      []string `yaml:"roles,omitempty"`       // хотя бы одна из ролей (any-of)
+	RolesAll   []string `yaml:"roles_all,omitempty"`   // все перечисленные роли (all-of)
 	StripToken *bool    `yaml:"strip_token,omitempty"` // удалять токен (наследует глобальный если не указан)
 }
 
