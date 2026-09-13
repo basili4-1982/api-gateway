@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -53,8 +54,11 @@ type TLSConfig struct {
 	Domains      []string `yaml:"domains"`       // домены для сертификатов
 	Email        string   `yaml:"email"`         // email для Let's Encrypt (обязательно)
 	CacheDir     string   `yaml:"cache_dir"`     // директория для кеша сертификатов
-	Staging      bool     `yaml:"staging"`       // true = тестовый CA, false = production Let's Encrypt
+	Staging      bool     `yaml:"staging"`       // true = staging CA, false = production Let's Encrypt
 	RedirectHTTP bool     `yaml:"redirect_http"` // автоматический redirect HTTP → HTTPS
+	// DirectoryURL — необязательный ACME directory URL. Если задан, перекрывает
+	// выбор CA по staging. Пусто = staging ? Let's Encrypt staging : production.
+	DirectoryURL string `yaml:"directory_url"`
 }
 
 // StaticApp конфигурация SPA фронтенда
@@ -85,11 +89,27 @@ type App struct {
 
 // ServerConfig конфигурация HTTP сервера
 type ServerConfig struct {
-	Port               int           `yaml:"port"`
-	ReadTimeout        time.Duration `yaml:"read_timeout"`
-	WriteTimeout       time.Duration `yaml:"write_timeout"`
-	IdleTimeout        time.Duration `yaml:"idle_timeout"`
-	MaxRequestBodySize int64         `yaml:"max_request_body_size"` // макс. размер тела запроса (байт), 0 = без лимита
+	Port         int           `yaml:"port"`
+	ReadTimeout  time.Duration `yaml:"read_timeout"`
+	WriteTimeout time.Duration `yaml:"write_timeout"`
+	IdleTimeout  time.Duration `yaml:"idle_timeout"`
+	// MaxRequestBodySize — лимит тела запроса в байтах.
+	// nil (ключ не задан) → значение по умолчанию 10 MiB;
+	// 0 → без лимита; >0 → лимит в байтах.
+	MaxRequestBodySize *int64 `yaml:"max_request_body_size"`
+}
+
+// defaultMaxRequestBodySize применяется, когда max_request_body_size не задан.
+const defaultMaxRequestBodySize int64 = 10 << 20 // 10 MiB
+
+// EffectiveMaxRequestBodySize возвращает действующий лимит тела запроса в
+// байтах. nil трактуется как значение по умолчанию (10 MiB); значение <= 0
+// означает отсутствие лимита.
+func (s ServerConfig) EffectiveMaxRequestBodySize() int64 {
+	if s.MaxRequestBodySize == nil {
+		return defaultMaxRequestBodySize
+	}
+	return *s.MaxRequestBodySize
 }
 
 // TargetConfig конфигурация целевого сервера
@@ -99,8 +119,22 @@ type TargetConfig struct {
 	Timeout     time.Duration `yaml:"timeout"`      // таймаут для запросов к цели
 	PathPrefix  string        `yaml:"path_prefix"`  // какой путь проксировать (опционально)
 	StripPrefix bool          `yaml:"strip_prefix"` // удалять префикс при проксировании
-	Weight      int           `yaml:"weight"`       // для балансировки (опционально)
-	HealthCheck string        `yaml:"health_check"` // URL для проверки здоровья
+	// Weight — вес таргета при взвешенной балансировке внутри одного route-пула
+	// (правила с одинаковыми host, path_prefix и methods). nil (ключ не задан) →
+	// значение по умолчанию 1; 0 или отрицательное → таргет исключается из
+	// выбора; >0 → вес.
+	Weight      *int   `yaml:"weight"`
+	HealthCheck string `yaml:"health_check"` // URL для проверки здоровья
+}
+
+// EffectiveWeight возвращает действующий вес таргета: nil трактуется как 1
+// (значение по умолчанию). Явные 0 и отрицательные значения сохраняются —
+// вызывающая сторона исключает такие таргеты из выбора.
+func (t TargetConfig) EffectiveWeight() int {
+	if t.Weight == nil {
+		return 1
+	}
+	return *t.Weight
 }
 
 // RoutingConfig конфигурация маршрутизации
@@ -178,7 +212,6 @@ type PermissionsConfig struct {
 // HeadersConfig конфигурация заголовков
 type HeadersConfig struct {
 	StripAuthorization bool              `yaml:"strip_authorization"`
-	ForwardHeaders     bool              `yaml:"forward_headers"`
 	ClaimToHeader      map[string]string `yaml:"claim_to_header"`
 	AddHeaders         map[string]string `yaml:"add_headers"`
 	SignHeader         string            `yaml:"sign_header"`
@@ -241,15 +274,18 @@ func (w WebhookConfig) IncludeRequestBodyEnabled() bool {
 // LoggingConfig конфигурация логирования
 type LoggingConfig struct {
 	Level     string `yaml:"level"`      // debug, info, warn, error
-	Format    string `yaml:"format"`     // json или text
+	Format    string `yaml:"format"`     // json, console или text (алиас console)
 	AccessLog bool   `yaml:"access_log"` // построчный лог каждого запроса; выкл. по умолчанию (аллокации на каждый запрос)
 }
 
-// Load загружает конфигурацию из файла
-func Load(path string) (*Config, error) {
+// Load загружает конфигурацию из файла. Второе возвращаемое значение —
+// предупреждения о неизвестных YAML-ключах с точечными путями (например
+// "headers.forward_headers"); вызывающая сторона должна залогировать их.
+// Неизвестные ключи не являются ошибкой — конфиг по-прежнему загружается.
+func Load(path string) (*Config, []string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+		return nil, nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
 	// Подстановка переменных окружения ${VAR_NAME}
@@ -261,20 +297,111 @@ func Load(path string) (*Config, error) {
 		return val
 	})
 
-	var cfg Config
-	if err := yaml.Unmarshal([]byte(resolved), &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(resolved), &root); err != nil {
+		return nil, nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
+
+	var cfg Config
+	if root.Kind != 0 {
+		if err := root.Decode(&cfg); err != nil {
+			return nil, nil, fmt.Errorf("failed to parse config file: %w", err)
+		}
+	}
+
+	warnings := unknownYAMLKeys(&root)
 
 	// Устанавливаем значения по умолчанию
 	cfg.setDefaults()
 
 	// Валидация конфигурации
 	if err := cfg.validate(); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
+		return nil, nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	return &cfg, nil
+	return &cfg, warnings, nil
+}
+
+// unknownYAMLKeys обходит дерево YAML и возвращает точечные пути ключей, для
+// которых нет соответствующего поля в структуре Config (по yaml-тегам).
+func unknownYAMLKeys(root *yaml.Node) []string {
+	if root == nil || root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
+		return nil
+	}
+	var warnings []string
+	seen := make(map[string]bool)
+	collectUnknownKeys(root.Content[0], reflect.TypeOf(Config{}), "", &warnings, seen)
+	return warnings
+}
+
+// collectUnknownKeys рекурсивно сверяет узлы YAML со структурой typ.
+// path — точечный путь от корня; warnings пополняется неизвестными ключами.
+func collectUnknownKeys(node *yaml.Node, typ reflect.Type, path string, warnings *[]string, seen map[string]bool) {
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
+	}
+
+	switch typ.Kind() {
+	case reflect.Struct:
+		if node.Kind != yaml.MappingNode {
+			return
+		}
+		fields := yamlFields(typ)
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			key := node.Content[i].Value
+			childPath := key
+			if path != "" {
+				childPath = path + "." + key
+			}
+			fieldType, ok := fields[key]
+			if !ok {
+				if !seen[childPath] {
+					seen[childPath] = true
+					*warnings = append(*warnings, childPath)
+				}
+				continue
+			}
+			collectUnknownKeys(node.Content[i+1], fieldType, childPath, warnings, seen)
+		}
+	case reflect.Slice, reflect.Array:
+		if node.Kind != yaml.SequenceNode {
+			return
+		}
+		elem := typ.Elem()
+		for _, item := range node.Content {
+			collectUnknownKeys(item, elem, path, warnings, seen)
+		}
+	}
+	// Map и скаляры: ключи карт произвольны, у скаляров вложенности нет.
+}
+
+// yamlFields строит карту "yaml-имя поля → тип поля" для структуры,
+// разворачивая встроенные (anonymous/inline) структуры.
+func yamlFields(typ reflect.Type) map[string]reflect.Type {
+	fields := make(map[string]reflect.Type)
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		name, opts, _ := strings.Cut(field.Tag.Get("yaml"), ",")
+		if name == "-" {
+			continue
+		}
+		if name == "" {
+			if field.Anonymous || strings.Contains(opts, "inline") {
+				embedded := field.Type
+				for embedded.Kind() == reflect.Pointer {
+					embedded = embedded.Elem()
+				}
+				if embedded.Kind() == reflect.Struct {
+					for k, v := range yamlFields(embedded) {
+						fields[k] = v
+					}
+				}
+			}
+			continue
+		}
+		fields[name] = field.Type
+	}
+	return fields
 }
 
 // setDefaults устанавливает значения по умолчанию
@@ -294,8 +421,10 @@ func (c *Config) setDefaults() {
 	if c.Server.IdleTimeout == 0 {
 		c.Server.IdleTimeout = 120 * time.Second
 	}
-	if c.Server.MaxRequestBodySize == 0 {
-		c.Server.MaxRequestBodySize = 10 << 20 // 10 MB
+	if c.Server.MaxRequestBodySize == nil {
+		// Ключ не задан → дефолт 10 MiB. Явный 0 остаётся без лимита.
+		size := defaultMaxRequestBodySize
+		c.Server.MaxRequestBodySize = &size
 	}
 
 	if c.TLS != nil && c.TLS.Enabled {
@@ -323,6 +452,12 @@ func (c *Config) setDefaults() {
 		if c.Targets[i].Timeout == 0 {
 			c.Targets[i].Timeout = 30 * time.Second
 		}
+		if c.Targets[i].Weight == nil {
+			// Ключ не задан → дефолт 1. Явный 0 (или отрицательный)
+			// сохраняется и исключает таргет из выбора.
+			weight := 1
+			c.Targets[i].Weight = &weight
+		}
 	}
 
 	if c.JWT.Algorithm == "" {
@@ -331,6 +466,9 @@ func (c *Config) setDefaults() {
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
 	}
+	// Формат логирования нормализуем один раз: JSON, Console и т.п. должны
+	// приниматься наравне со строчными.
+	c.Logging.Format = strings.ToLower(strings.TrimSpace(c.Logging.Format))
 	if c.Logging.Format == "" {
 		c.Logging.Format = "text"
 	}
@@ -434,12 +572,41 @@ func (c *Config) validate() error {
 	}
 
 	// Проверяем правила маршрутизации
+	poolPolicy := make(map[string]RoutingRule)
 	for _, rule := range c.Routing.Rules {
 		if rule.PathPrefix == "" {
 			return fmt.Errorf("routing rule path_prefix is required")
 		}
 		if !targetNames[rule.TargetName] {
 			return fmt.Errorf("routing rule references unknown target: %s", rule.TargetName)
+		}
+		// Правила, совпадающие по (host, path_prefix, methods), делят один пул
+		// балансировки. Политика пула (auth, strip_path, rate_limit) должна
+		// совпадать, иначе поведение запроса зависело бы от выбранного таргета.
+		key := RuleRouteKey(rule)
+		if first, ok := poolPolicy[key]; ok {
+			if first.StripPath != rule.StripPath ||
+				!reflect.DeepEqual(first.Auth, rule.Auth) ||
+				!reflect.DeepEqual(first.RateLimit, rule.RateLimit) {
+				return fmt.Errorf("routing rules for host %q path_prefix %q methods %v share a target pool but differ in auth, strip_path or rate_limit",
+					rule.Host, rule.PathPrefix, rule.Methods)
+			}
+			continue
+		}
+		poolPolicy[key] = rule
+	}
+
+	// Проверяем формат логирования. Пустое значение допустимо для
+	// программно собранных конфигов — setDefaults подставляет "text".
+	// Нормализуем регистр, чтобы "JSON"/"Console" принимались и сохранялись
+	// в каноническом виде.
+	format := strings.ToLower(strings.TrimSpace(c.Logging.Format))
+	if format != "" {
+		switch format {
+		case "console", "text", "json":
+			c.Logging.Format = format
+		default:
+			return fmt.Errorf("logging.format must be one of console, text, json, got %q", c.Logging.Format)
 		}
 	}
 
@@ -516,7 +683,8 @@ func (c *Config) FindTargetForPath(path string, method string, host ...string) (
 		reqHost = host[0]
 	}
 
-	for _, rule := range c.Routing.Rules {
+	for i := range c.Routing.Rules {
+		rule := &c.Routing.Rules[i]
 		// Проверяем Host, если указан
 		if rule.Host != "" {
 			if reqHost == "" {
@@ -550,7 +718,7 @@ func (c *Config) FindTargetForPath(path string, method string, host ...string) (
 		// Ищем самый длинный совпадающий префикс
 		if strings.HasPrefix(path, rule.PathPrefix) {
 			if len(rule.PathPrefix) > bestMatchLen {
-				bestMatch = &rule
+				bestMatch = rule
 				bestMatchLen = len(rule.PathPrefix)
 			}
 		}

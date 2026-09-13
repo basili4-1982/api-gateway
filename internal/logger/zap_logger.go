@@ -47,15 +47,8 @@ func NewZapLogger(cfg *config.LoggingConfig) (*zap.Logger, error) {
 		EncodeCaller:   zapcore.ShortCallerEncoder, // путь/файл:строка
 	}
 
-	// Выбор формата (JSON или консоль)
-	var encoder zapcore.Encoder
-	if cfg.Format == "json" {
-		encoder = zapcore.NewJSONEncoder(encoderConfig)
-	} else {
-		// Для консольного вывода добавляем цвета
-		encoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
-		encoder = zapcore.NewConsoleEncoder(encoderConfig)
-	}
+	// Выбор формата: json, console, text (алиас console).
+	encoder := newEncoder(cfg.Format, encoderConfig)
 
 	// Создаем ядро
 	core := zapcore.NewCore(
@@ -68,6 +61,18 @@ func NewZapLogger(cfg *config.LoggingConfig) (*zap.Logger, error) {
 	logger := zap.New(core, zap.AddCaller(), zap.AddStacktrace(zapcore.ErrorLevel))
 
 	return logger, nil
+}
+
+// newEncoder выбирает энкодер по формату логирования. Валидные значения:
+// json, console и text (алиас console). Любое другое значение трактуется как
+// консольный вывод — конфиг валидируется отдельно (config.validate).
+func newEncoder(format string, encoderConfig zapcore.EncoderConfig) zapcore.Encoder {
+	if strings.ToLower(format) == "json" {
+		return zapcore.NewJSONEncoder(encoderConfig)
+	}
+	// console и text выводят одинаковый человекочитаемый формат с цветами.
+	encoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	return zapcore.NewConsoleEncoder(encoderConfig)
 }
 
 // MustZapLogger создает логгер или паникует при ошибке
