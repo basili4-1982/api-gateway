@@ -62,8 +62,31 @@ targets:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Targets[0].Weight != 1 {
-		t.Errorf("target weight = %d, want default 1", cfg.Targets[0].Weight)
+	if cfg.Targets[0].EffectiveWeight() != 1 {
+		t.Errorf("target weight = %d, want default 1", cfg.Targets[0].EffectiveWeight())
+	}
+	if cfg.Targets[0].Weight == nil || *cfg.Targets[0].Weight != 1 {
+		t.Errorf("omitted weight must default to 1, got %v", cfg.Targets[0].Weight)
+	}
+}
+
+func TestLoad_ExplicitZeroWeightIsExcluded(t *testing.T) {
+	yaml := `
+targets:
+  - name: "api"
+    url: "http://api:9001"
+    weight: 0
+`
+	path := writeTempConfig(t, yaml)
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Targets[0].Weight == nil || *cfg.Targets[0].Weight != 0 {
+		t.Fatalf("explicit weight 0 must be preserved, got %v", cfg.Targets[0].Weight)
+	}
+	if cfg.Targets[0].EffectiveWeight() != 0 {
+		t.Errorf("explicit weight 0 effective = %d, want 0 (excluded)", cfg.Targets[0].EffectiveWeight())
 	}
 }
 

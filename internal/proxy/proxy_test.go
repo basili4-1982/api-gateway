@@ -451,9 +451,22 @@ func TestReadBodyLimited(t *testing.T) {
 
 // ──────── Weighted balancing ────────
 
+func intPtr(v int) *int { return &v }
+
 func poolTarget(name string, weight int) *TargetProxy {
 	return &TargetProxy{
-		config:           &config.TargetConfig{Name: name, Weight: weight},
+		config:           &config.TargetConfig{Name: name, Weight: intPtr(weight)},
+		healthy:          true,
+		cbState:          stateClosed,
+		failureThreshold: defaultFailureThreshold,
+		cbTimeout:        defaultCBTimeout,
+	}
+}
+
+// poolTargetDefaultWeight строит таргет без явного weight — nil, т.е. дефолт.
+func poolTargetDefaultWeight(name string) *TargetProxy {
+	return &TargetProxy{
+		config:           &config.TargetConfig{Name: name},
 		healthy:          true,
 		cbState:          stateClosed,
 		failureThreshold: defaultFailureThreshold,
@@ -464,7 +477,7 @@ func poolTarget(name string, weight int) *TargetProxy {
 func poolOf(targets ...*TargetProxy) *RouteConfig {
 	rc := &RouteConfig{}
 	for _, tp := range targets {
-		weight := tp.config.Weight
+		weight := tp.config.EffectiveWeight()
 		if weight < 0 {
 			weight = 0
 		}
@@ -535,6 +548,16 @@ func TestPickTarget_ZeroWeightNeverSelected(t *testing.T) {
 	}
 }
 
+func TestPickTarget_NilWeightDefaultsToOne(t *testing.T) {
+	rc := poolOf(poolTargetDefaultWeight("a"))
+	if rc.totalWeight != 1 || rc.weights[0] != 1 {
+		t.Fatalf("nil weight must default to 1, got weights=%v total=%d", rc.weights, rc.totalWeight)
+	}
+	if tp := rc.pickTarget(false); tp == nil || tp.config.Name != "a" {
+		t.Fatalf("nil-weight target must be selectable, got %v", tp)
+	}
+}
+
 func TestPickTarget_HalfOpenProbeSurvivesAnotherWinner(t *testing.T) {
 	// b сканируется первым и выигрывает первый раунд; a — half-open с
 	// взведённым пробником. До исправления сканирование a потребляло пробник,
@@ -567,8 +590,8 @@ func TestReload_PicksUpWeightChanges(t *testing.T) {
 	newCfg := func(weightA, weightB int) *config.Config {
 		return &config.Config{
 			Targets: []config.TargetConfig{
-				{Name: "a", URL: "http://a:9000", Timeout: time.Second, Weight: weightA},
-				{Name: "b", URL: "http://b:9000", Timeout: time.Second, Weight: weightB},
+				{Name: "a", URL: "http://a:9000", Timeout: time.Second, Weight: intPtr(weightA)},
+				{Name: "b", URL: "http://b:9000", Timeout: time.Second, Weight: intPtr(weightB)},
 			},
 			Routing: config.RoutingConfig{Rules: []config.RoutingRule{
 				{Host: "h", PathPrefix: "/api", TargetName: "a"},
@@ -639,8 +662,8 @@ func TestProxyHandler_BalancesAcrossPool(t *testing.T) {
 
 	cfg := &config.Config{
 		Targets: []config.TargetConfig{
-			{Name: "a", URL: srvA.URL, Weight: 3},
-			{Name: "b", URL: srvB.URL, Weight: 1},
+			{Name: "a", URL: srvA.URL, Weight: intPtr(3)},
+			{Name: "b", URL: srvB.URL, Weight: intPtr(1)},
 		},
 		Routing: config.RoutingConfig{Rules: []config.RoutingRule{
 			{Host: "h", PathPrefix: "/api", TargetName: "a"},
@@ -683,7 +706,7 @@ func TestProxyHandler_BalancesAcrossPool(t *testing.T) {
 
 func TestProxyHandler_AllUnhealthyReturns503(t *testing.T) {
 	cfg := &config.Config{
-		Targets: []config.TargetConfig{{Name: "a", URL: "http://a:9000", Weight: 1}},
+		Targets: []config.TargetConfig{{Name: "a", URL: "http://a:9000", Weight: intPtr(1)}},
 		Routing: config.RoutingConfig{Rules: []config.RoutingRule{
 			{Host: "h", PathPrefix: "/api", TargetName: "a"},
 		}},

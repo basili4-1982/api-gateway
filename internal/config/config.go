@@ -120,10 +120,21 @@ type TargetConfig struct {
 	PathPrefix  string        `yaml:"path_prefix"`  // какой путь проксировать (опционально)
 	StripPrefix bool          `yaml:"strip_prefix"` // удалять префикс при проксировании
 	// Weight — вес таргета при взвешенной балансировке внутри одного route-пула
-	// (правила с одинаковыми host, path_prefix и methods). Значение по умолчанию 1.
-	// Таргет с весом 0 (или отрицательным) из выбора исключается.
-	Weight      int    `yaml:"weight"`
+	// (правила с одинаковыми host, path_prefix и methods). nil (ключ не задан) →
+	// значение по умолчанию 1; 0 или отрицательное → таргет исключается из
+	// выбора; >0 → вес.
+	Weight      *int   `yaml:"weight"`
 	HealthCheck string `yaml:"health_check"` // URL для проверки здоровья
+}
+
+// EffectiveWeight возвращает действующий вес таргета: nil трактуется как 1
+// (значение по умолчанию). Явные 0 и отрицательные значения сохраняются —
+// вызывающая сторона исключает такие таргеты из выбора.
+func (t TargetConfig) EffectiveWeight() int {
+	if t.Weight == nil {
+		return 1
+	}
+	return *t.Weight
 }
 
 // RoutingConfig конфигурация маршрутизации
@@ -441,9 +452,11 @@ func (c *Config) setDefaults() {
 		if c.Targets[i].Timeout == 0 {
 			c.Targets[i].Timeout = 30 * time.Second
 		}
-		if c.Targets[i].Weight == 0 {
-			// Дефолт для балансировки; 0 в конфиге трактуется как «не задан».
-			c.Targets[i].Weight = 1
+		if c.Targets[i].Weight == nil {
+			// Ключ не задан → дефолт 1. Явный 0 (или отрицательный)
+			// сохраняется и исключает таргет из выбора.
+			weight := 1
+			c.Targets[i].Weight = &weight
 		}
 	}
 

@@ -218,8 +218,48 @@ func TestParseTarget_Weight(t *testing.T) {
 		},
 	}}, testOpts())
 
-	if len(res.Targets) != 1 || res.Targets[0].Weight != 5 {
+	if len(res.Targets) != 1 || res.Targets[0].EffectiveWeight() != 5 {
 		t.Fatalf("expected weight 5, got %+v", res.Targets)
+	}
+}
+
+func TestParseTarget_WeightZeroPreserved(t *testing.T) {
+	res := ParseContainers([]Container{{
+		ID: "c1",
+		Labels: map[string]string{
+			"gateway.enable": "true", "gateway.name": "svc", "gateway.port": "9000",
+			"gateway.host": "x", "gateway.weight": "0",
+		},
+	}}, testOpts())
+
+	if len(res.Targets) != 1 {
+		t.Fatalf("expected 1 target, got %+v", res.Targets)
+	}
+	if res.Targets[0].Weight == nil || *res.Targets[0].Weight != 0 {
+		t.Fatalf("label weight 0 must be preserved as explicit 0, got %v", res.Targets[0].Weight)
+	}
+	if res.Targets[0].EffectiveWeight() != 0 {
+		t.Fatalf("explicit label weight 0 effective = %d, want 0 (excluded)", res.Targets[0].EffectiveWeight())
+	}
+}
+
+func TestParseTarget_NoWeightLabelDefaultsToOne(t *testing.T) {
+	res := ParseContainers([]Container{{
+		ID: "c1",
+		Labels: map[string]string{
+			"gateway.enable": "true", "gateway.name": "svc", "gateway.port": "9000",
+			"gateway.host": "x",
+		},
+	}}, testOpts())
+
+	if len(res.Targets) != 1 {
+		t.Fatalf("expected 1 target, got %+v", res.Targets)
+	}
+	if res.Targets[0].Weight != nil {
+		t.Fatalf("omitted weight label must stay nil (default), got %d", *res.Targets[0].Weight)
+	}
+	if res.Targets[0].EffectiveWeight() != 1 {
+		t.Fatalf("omitted weight effective = %d, want 1", res.Targets[0].EffectiveWeight())
 	}
 }
 

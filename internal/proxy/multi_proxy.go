@@ -939,7 +939,7 @@ func targetChanged(old, next *config.TargetConfig) bool {
 	return old.URL != next.URL ||
 		old.Timeout != next.Timeout ||
 		old.HealthCheck != next.HealthCheck ||
-		old.Weight != next.Weight
+		old.EffectiveWeight() != next.EffectiveWeight()
 }
 
 // rebuildRouteConfigs пересобирает route-пулы из правил и уже созданных
@@ -965,7 +965,7 @@ func (mp *MultiProxy) rebuildRouteConfigs(cfg *config.Config) {
 		}
 
 		if tp := mp.targets[rule.TargetName]; tp != nil {
-			weight := tp.config.Weight
+			weight := tp.config.EffectiveWeight()
 			if weight < 0 {
 				weight = 0
 			}
