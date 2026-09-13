@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -263,11 +264,14 @@ type LoggingConfig struct {
 	AccessLog bool   `yaml:"access_log"` // построчный лог каждого запроса; выкл. по умолчанию (аллокации на каждый запрос)
 }
 
-// Load загружает конфигурацию из файла
-func Load(path string) (*Config, error) {
+// Load загружает конфигурацию из файла. Второе возвращаемое значение —
+// предупреждения о неизвестных YAML-ключах с точечными путями (например
+// "headers.forward_headers"); вызывающая сторона должна залогировать их.
+// Неизвестные ключи не являются ошибкой — конфиг по-прежнему загружается.
+func Load(path string) (*Config, []string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %w", err)
+		return nil, nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
 	// Подстановка переменных окружения ${VAR_NAME}
@@ -279,20 +283,111 @@ func Load(path string) (*Config, error) {
 		return val
 	})
 
-	var cfg Config
-	if err := yaml.Unmarshal([]byte(resolved), &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse config file: %w", err)
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(resolved), &root); err != nil {
+		return nil, nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
+
+	var cfg Config
+	if root.Kind != 0 {
+		if err := root.Decode(&cfg); err != nil {
+			return nil, nil, fmt.Errorf("failed to parse config file: %w", err)
+		}
+	}
+
+	warnings := unknownYAMLKeys(&root)
 
 	// Устанавливаем значения по умолчанию
 	cfg.setDefaults()
 
 	// Валидация конфигурации
 	if err := cfg.validate(); err != nil {
-		return nil, fmt.Errorf("invalid configuration: %w", err)
+		return nil, nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
-	return &cfg, nil
+	return &cfg, warnings, nil
+}
+
+// unknownYAMLKeys обходит дерево YAML и возвращает точечные пути ключей, для
+// которых нет соответствующего поля в структуре Config (по yaml-тегам).
+func unknownYAMLKeys(root *yaml.Node) []string {
+	if root == nil || root.Kind != yaml.DocumentNode || len(root.Content) == 0 {
+		return nil
+	}
+	var warnings []string
+	seen := make(map[string]bool)
+	collectUnknownKeys(root.Content[0], reflect.TypeOf(Config{}), "", &warnings, seen)
+	return warnings
+}
+
+// collectUnknownKeys рекурсивно сверяет узлы YAML со структурой typ.
+// path — точечный путь от корня; warnings пополняется неизвестными ключами.
+func collectUnknownKeys(node *yaml.Node, typ reflect.Type, path string, warnings *[]string, seen map[string]bool) {
+	for typ.Kind() == reflect.Ptr {
+		typ = typ.Elem()
+	}
+
+	switch typ.Kind() {
+	case reflect.Struct:
+		if node.Kind != yaml.MappingNode {
+			return
+		}
+		fields := yamlFields(typ)
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			key := node.Content[i].Value
+			childPath := key
+			if path != "" {
+				childPath = path + "." + key
+			}
+			fieldType, ok := fields[key]
+			if !ok {
+				if !seen[childPath] {
+					seen[childPath] = true
+					*warnings = append(*warnings, childPath)
+				}
+				continue
+			}
+			collectUnknownKeys(node.Content[i+1], fieldType, childPath, warnings, seen)
+		}
+	case reflect.Slice, reflect.Array:
+		if node.Kind != yaml.SequenceNode {
+			return
+		}
+		elem := typ.Elem()
+		for _, item := range node.Content {
+			collectUnknownKeys(item, elem, path, warnings, seen)
+		}
+	}
+	// Map и скаляры: ключи карт произвольны, у скаляров вложенности нет.
+}
+
+// yamlFields строит карту "yaml-имя поля → тип поля" для структуры,
+// разворачивая встроенные (anonymous/inline) структуры.
+func yamlFields(typ reflect.Type) map[string]reflect.Type {
+	fields := make(map[string]reflect.Type)
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		name, opts, _ := strings.Cut(field.Tag.Get("yaml"), ",")
+		if name == "-" {
+			continue
+		}
+		if name == "" {
+			if field.Anonymous || strings.Contains(opts, "inline") {
+				embedded := field.Type
+				for embedded.Kind() == reflect.Ptr {
+					embedded = embedded.Elem()
+				}
+				if embedded.Kind() == reflect.Struct {
+					for k, v := range yamlFields(embedded) {
+						fields[k] = v
+					}
+				}
+			}
+			continue
+		}
+		fields[name] = field.Type
+	}
+	return fields
 }
 
 // setDefaults устанавливает значения по умолчанию
