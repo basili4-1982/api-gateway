@@ -44,16 +44,59 @@ func TestMerge_StaticTargetWinsOnNameCollision(t *testing.T) {
 	}
 }
 
-func TestMerge_StaticRuleWinsOnHostPathCollision(t *testing.T) {
+func TestMerge_PoolsRulesForSameRouteDifferentTargets(t *testing.T) {
+	// Один и тот же route (host, path_prefix, methods), но разные таргеты:
+	// оба правила сохраняются — из них соберётся пул балансировки.
 	got := Merge(baseCfg(),
 		[]TargetConfig{{Name: "svc", URL: "http://svc:9000"}},
 		[]RoutingRule{{Host: "", PathPrefix: "/api", TargetName: "svc"}},
 	)
-	if len(got.Routing.Rules) != 1 {
-		t.Fatalf("colliding rule must be skipped, got %d", len(got.Routing.Rules))
+	if len(got.Routing.Rules) != 2 {
+		t.Fatalf("pooled rule must be kept, got %d rules", len(got.Routing.Rules))
 	}
 	if got.Routing.Rules[0].TargetName != "static-api" {
-		t.Errorf("static rule must win, got %s", got.Routing.Rules[0].TargetName)
+		t.Errorf("static rule must come first, got %s", got.Routing.Rules[0].TargetName)
+	}
+	if got.Routing.Rules[1].TargetName != "svc" {
+		t.Errorf("discovered pooled rule must be kept, got %s", got.Routing.Rules[1].TargetName)
+	}
+}
+
+func TestMerge_DedupsIdenticalRule(t *testing.T) {
+	// Полностью одинаковые route и target_name дедуплицируются.
+	got := Merge(baseCfg(),
+		[]TargetConfig{{Name: "svc", URL: "http://svc:9000"}},
+		[]RoutingRule{
+			{Host: "", PathPrefix: "/api", TargetName: "svc"},
+			{Host: "", PathPrefix: "/api", TargetName: "svc"},
+		},
+	)
+	if len(got.Routing.Rules) != 2 {
+		t.Fatalf("duplicate rule must be skipped, got %d rules", len(got.Routing.Rules))
+	}
+}
+
+func TestMerge_KeepsSameTargetDifferentMethods(t *testing.T) {
+	// Методы входят в ключ route: GET и POST — разные пулы.
+	got := Merge(baseCfg(),
+		[]TargetConfig{{Name: "svc", URL: "http://svc:9000"}},
+		[]RoutingRule{
+			{Host: "", PathPrefix: "/api", TargetName: "svc", Methods: []string{"GET"}},
+			{Host: "", PathPrefix: "/api", TargetName: "svc", Methods: []string{"POST"}},
+		},
+	)
+	if len(got.Routing.Rules) != 3 {
+		t.Fatalf("rules with different methods must both survive, got %d rules", len(got.Routing.Rules))
+	}
+}
+
+func TestMerge_DefaultsDiscoveredWeight(t *testing.T) {
+	got := Merge(baseCfg(),
+		[]TargetConfig{{Name: "svc", URL: "http://svc:9000"}},
+		nil,
+	)
+	if got.Targets[1].Weight != 1 {
+		t.Errorf("discovered target weight = %d, want default 1", got.Targets[1].Weight)
 	}
 }
 

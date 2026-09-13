@@ -51,6 +51,22 @@ jwt:
 	}
 }
 
+func TestLoad_DefaultsTargetWeightToOne(t *testing.T) {
+	yaml := `
+targets:
+  - name: "api"
+    url: "http://api:9001"
+`
+	path := writeTempConfig(t, yaml)
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Targets[0].Weight != 1 {
+		t.Errorf("target weight = %d, want default 1", cfg.Targets[0].Weight)
+	}
+}
+
 func TestLoad_MissingTarget(t *testing.T) {
 	yaml := `
 server:
