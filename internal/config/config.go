@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -298,14 +299,30 @@ func Load(path string) (*Config, []string, error) {
 		return nil, nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	// Подстановка переменных окружения ${VAR_NAME}
+	// Подстановка переменных окружения ${VAR_NAME}. Если переменная не задана
+	// или пуста, конфигурация считается невалидной: молчаливый фолбэк на
+	// литерал "${VAR}" опасен (его можно случайно использовать как секрет).
+	// Экранирование литерала — "$${VAR}".
+	var missing []string
+	seenMissing := make(map[string]bool)
 	resolved := os.Expand(string(data), func(key string) string {
-		val := os.Getenv(key)
-		if val == "" {
-			return fmt.Sprintf("${%s}", key)
+		if key == "$" {
+			return "$"
+		}
+		val, ok := os.LookupEnv(key)
+		if !ok || val == "" {
+			if !seenMissing[key] {
+				seenMissing[key] = true
+				missing = append(missing, key)
+			}
+			return ""
 		}
 		return val
 	})
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return nil, nil, fmt.Errorf("config references undefined environment variable(s): %s", strings.Join(missing, ", "))
+	}
 
 	var root yaml.Node
 	if err := yaml.Unmarshal([]byte(resolved), &root); err != nil {

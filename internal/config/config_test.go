@@ -933,3 +933,86 @@ func TestValidate_PermissionsRejectsEmptyMethod(t *testing.T) {
 		t.Fatal("expected error for empty permissions.method")
 	}
 }
+
+func TestLoad_EnvSubstitution(t *testing.T) {
+	t.Setenv("TEST_ENV_VALUE", "prod-x")
+	path := writeTempConfig(t, `
+application:
+  env: "${TEST_ENV_VALUE}"
+targets:
+  - name: backend
+    url: "http://backend:80"
+`)
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Env != "prod-x" {
+		t.Fatalf("env = %q, want %q", cfg.Env, "prod-x")
+	}
+}
+
+func TestLoad_MissingEnvFails(t *testing.T) {
+	os.Unsetenv("TEST_MISSING_ENV")
+	path := writeTempConfig(t, `
+application:
+  env: "${TEST_MISSING_ENV}"
+`)
+	_, _, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for undefined env var")
+	}
+	if !strings.Contains(err.Error(), "TEST_MISSING_ENV") {
+		t.Fatalf("error %q does not name the missing variable", err)
+	}
+}
+
+func TestLoad_EmptyEnvFails(t *testing.T) {
+	t.Setenv("TEST_EMPTY_ENV", "")
+	path := writeTempConfig(t, `
+application:
+  env: "${TEST_EMPTY_ENV}"
+`)
+	_, _, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for empty env var")
+	}
+	if !strings.Contains(err.Error(), "TEST_EMPTY_ENV") {
+		t.Fatalf("error %q does not name the empty variable", err)
+	}
+}
+
+func TestLoad_MultipleMissingEnvsListed(t *testing.T) {
+	os.Unsetenv("TEST_MISS_B")
+	os.Unsetenv("TEST_MISS_A")
+	path := writeTempConfig(t, `
+application:
+  env: "${TEST_MISS_B}"
+jwt:
+  secret_key: "${TEST_MISS_A}"
+`)
+	_, _, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for undefined env vars")
+	}
+	if !strings.Contains(err.Error(), "TEST_MISS_A") || !strings.Contains(err.Error(), "TEST_MISS_B") {
+		t.Fatalf("error %q must name both variables", err)
+	}
+}
+
+func TestLoad_EscapedEnvStaysLiteral(t *testing.T) {
+	path := writeTempConfig(t, `
+application:
+  env: "$${LITERAL}"
+targets:
+  - name: backend
+    url: "http://backend:80"
+`)
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Env != "${LITERAL}" {
+		t.Fatalf("env = %q, want %q", cfg.Env, "${LITERAL}")
+	}
+}
