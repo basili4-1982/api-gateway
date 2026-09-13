@@ -1,0 +1,25 @@
+# api-gateway route rate-limit scenario (scenario: feature-cost/api-gateway/rate-limit).
+# The token bucket is configured effectively unlimited (1e9 rps/burst) so the limiter
+# code path runs on every request without throttling the measured throughput.
+server:
+  port: 8080
+application:
+  env: "prod"
+  max_idle_conns_per_host: 1000
+jwt:
+  required: false
+  secret_key: "benchsecret"
+targets:
+  - name: "backend"
+    url: "http://backend:80"
+    timeout: 30s
+routing:
+  rules:
+    - path_prefix: "/"
+      target_name: "backend"
+      rate_limit:
+        requests_per_second: 1000000000
+        burst: 1000000000
+logging:
+  level: "error"
+  access_log: false

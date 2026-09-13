@@ -1,0 +1,12 @@
+# Traefik Docker-provider config for the service-discovery scenario (scenario: discovery/traefik).
+# exposedByDefault=false means only containers carrying traefik.enable=true are routed.
+entryPoints:
+  web:
+    address: ":80"
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+log:
+  level: "error"
+accessLog: null

@@ -1,0 +1,30 @@
+# api-gateway Docker service discovery (scenario: discovery/api-gateway).
+# Static targets/rules are empty: routes come only from Docker labels. debounce=500ms is
+# the reaction latency measured by the discovery scenario; resync_interval=5m is the
+# periodic full resync. state_file="" keeps discovered state in memory (no host path).
+server:
+  port: 8080
+application:
+  env: "prod"
+  max_idle_conns_per_host: 1000
+jwt:
+  required: false
+  secret_key: "benchsecret"
+targets: []
+routing:
+  rules: []
+discovery:
+  enabled: true
+  provider: docker
+  host: "unix:///var/run/docker.sock"
+  api_version: "v1.41"
+  label_prefix: "gateway"
+  service_name_labels:
+    - "com.docker.compose.service"
+  debounce: 500ms
+  resync_interval: 5m
+  default_timeout: 30s
+  state_file: ""
+logging:
+  level: "error"
+  access_log: false

@@ -1,0 +1,25 @@
+# api-gateway proxy-only baseline (scenarios: proxy-only / proxy-memory).
+# Health checks, circuit breaker and metrics are disabled and access logging is off so
+# the measurement reflects the raw reverse-proxy hot path only.
+# "benchsecret" is a non-secret, benchmark-only HS256 key; JWT is disabled here.
+server:
+  port: 8080
+application:
+  env: "prod"
+  health_check: false
+  circuit_breaker: false
+  metrics_enabled: false
+jwt:
+  required: false
+  secret_key: "benchsecret"
+targets:
+  - name: "backend"
+    url: "http://backend:80"
+    timeout: 30s
+routing:
+  rules:
+    - path_prefix: "/"
+      target_name: "backend"
+logging:
+  level: "error"
+  access_log: false

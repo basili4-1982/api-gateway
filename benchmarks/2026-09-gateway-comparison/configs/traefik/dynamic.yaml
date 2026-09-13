@@ -1,0 +1,11 @@
+# Traefik proxy-only baseline, dynamic config: single catch-all router to the backend.
+http:
+  routers:
+    all:
+      rule: "PathPrefix(`/`)"
+      service: backend
+  services:
+    backend:
+      loadBalancer:
+        servers:
+          - url: "http://backend:80"

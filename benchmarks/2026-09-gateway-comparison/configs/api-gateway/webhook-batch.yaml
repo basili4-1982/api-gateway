@@ -1,0 +1,30 @@
+# api-gateway batched HTTP webhook (scenario: feature-cost/api-gateway/webhook-http-batched).
+# Events go into a bounded queue; a worker flushes batches of up to 1000 events or every
+# 100ms. The bounded queue applies backpressure instead of dropping events.
+# "sink" is the minimal webhook helper (helpers/webhook). Source: config-webhook-batch.yaml.
+server:
+  port: 8080
+application:
+  env: "prod"
+  max_idle_conns_per_host: 1000
+jwt:
+  required: false
+  secret_key: "benchsecret"
+webhooks:
+  - name: "audit"
+    transport: "webhook"
+    webhook_url: "http://sink:9000/"
+    trigger: "on_response"
+    batch_size: 1000
+    flush_interval: 100ms
+targets:
+  - name: "backend"
+    url: "http://backend:80"
+    timeout: 30s
+routing:
+  rules:
+    - path_prefix: "/"
+      target_name: "backend"
+logging:
+  level: "error"
+  access_log: false
