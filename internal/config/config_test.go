@@ -437,6 +437,26 @@ func TestLoad_LoggingFormatAccepted(t *testing.T) {
 	}
 }
 
+func TestLoad_LoggingFormatCaseInsensitive(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"JSON", "json"},
+		{"Console", "console"},
+		{"TEXT", "text"},
+	} {
+		t.Run(tc.in, func(t *testing.T) {
+			yaml := "targets:\n  - name: \"api\"\n    url: \"http://api:9001\"\nlogging:\n  format: \"" + tc.in + "\"\n"
+			path := writeTempConfig(t, yaml)
+			cfg, _, err := Load(path)
+			if err != nil {
+				t.Fatalf("logging.format %q must be accepted case-insensitively: %v", tc.in, err)
+			}
+			if cfg.Logging.Format != tc.want {
+				t.Errorf("logging.format %q normalized = %q, want %q", tc.in, cfg.Logging.Format, tc.want)
+			}
+		})
+	}
+}
+
 func TestLoad_RejectsUnknownLoggingFormat(t *testing.T) {
 	yaml := `
 targets:
