@@ -466,6 +466,9 @@ func (c *Config) setDefaults() {
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
 	}
+	// Формат логирования нормализуем один раз: JSON, Console и т.п. должны
+	// приниматься наравне со строчными.
+	c.Logging.Format = strings.ToLower(strings.TrimSpace(c.Logging.Format))
 	if c.Logging.Format == "" {
 		c.Logging.Format = "text"
 	}
@@ -595,10 +598,16 @@ func (c *Config) validate() error {
 
 	// Проверяем формат логирования. Пустое значение допустимо для
 	// программно собранных конфигов — setDefaults подставляет "text".
-	switch c.Logging.Format {
-	case "", "console", "text", "json":
-	default:
-		return fmt.Errorf("logging.format must be one of console, text, json, got %q", c.Logging.Format)
+	// Нормализуем регистр, чтобы "JSON"/"Console" принимались и сохранялись
+	// в каноническом виде.
+	format := strings.ToLower(strings.TrimSpace(c.Logging.Format))
+	if format != "" {
+		switch format {
+		case "console", "text", "json":
+			c.Logging.Format = format
+		default:
+			return fmt.Errorf("logging.format must be one of console, text, json, got %q", c.Logging.Format)
+		}
 	}
 
 	// Проверяем TLS конфигурацию

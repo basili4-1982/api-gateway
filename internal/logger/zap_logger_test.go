@@ -55,6 +55,15 @@ func TestNewEncoder_TextIsConsoleAlias(t *testing.T) {
 	}
 }
 
+func TestNewEncoder_FormatCaseInsensitive(t *testing.T) {
+	if encodeEntry(t, "JSON") != encodeEntry(t, "json") {
+		t.Error("JSON must encode identically to json")
+	}
+	if encodeEntry(t, "Console") != encodeEntry(t, "console") {
+		t.Error("Console must encode identically to console")
+	}
+}
+
 func TestNewEncoder_JSONFormat(t *testing.T) {
 	jsonOut := encodeEntry(t, "json")
 	if !strings.Contains(jsonOut, `"msg":"hello"`) {
