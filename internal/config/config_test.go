@@ -819,3 +819,117 @@ routing:
 		t.Errorf("roles_all: got %v", auth.RolesAll)
 	}
 }
+
+func TestLoad_PermissionsEndpointDefaults(t *testing.T) {
+	yaml := `
+targets:
+  - name: "api"
+    url: "http://api:9001"
+permissions:
+  enabled: true
+  service_url: "http://perm"
+`
+	path := writeTempConfig(t, yaml)
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Permissions.Method != "GET" {
+		t.Errorf("default permissions.method = %q, want GET", cfg.Permissions.Method)
+	}
+	if cfg.Permissions.Path != "/api/v1/users/{user_id}/effective-permissions" {
+		t.Errorf("default permissions.path = %q", cfg.Permissions.Path)
+	}
+	if cfg.Permissions.APIKeyHeader != "X-API-Key" {
+		t.Errorf("default permissions.api_key_header = %q, want X-API-Key", cfg.Permissions.APIKeyHeader)
+	}
+}
+
+func TestLoad_PermissionsEndpointCustom(t *testing.T) {
+	yaml := `
+targets:
+  - name: "api"
+    url: "http://api:9001"
+permissions:
+  enabled: true
+  service_url: "http://perm"
+  method: "POST"
+  path: "/v2/users/{user_id}/perms"
+  api_key_header: "Authorization"
+`
+	path := writeTempConfig(t, yaml)
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Permissions.Method != "POST" {
+		t.Errorf("permissions.method = %q, want POST", cfg.Permissions.Method)
+	}
+	if cfg.Permissions.Path != "/v2/users/{user_id}/perms" {
+		t.Errorf("permissions.path = %q", cfg.Permissions.Path)
+	}
+	if cfg.Permissions.APIKeyHeader != "Authorization" {
+		t.Errorf("permissions.api_key_header = %q, want Authorization", cfg.Permissions.APIKeyHeader)
+	}
+}
+
+func TestLoad_PermissionsEnabledRequiresServiceURL(t *testing.T) {
+	yaml := `
+targets:
+  - name: "api"
+    url: "http://api:9001"
+permissions:
+  enabled: true
+`
+	path := writeTempConfig(t, yaml)
+	if _, _, err := Load(path); err == nil {
+		t.Fatal("expected error when permissions enabled without service_url")
+	}
+}
+
+func TestLoad_PermissionsPathRequiresUserIDPlaceholder(t *testing.T) {
+	yaml := `
+targets:
+  - name: "api"
+    url: "http://api:9001"
+permissions:
+  enabled: true
+  service_url: "http://perm"
+  path: "/api/v1/users/effective-permissions"
+`
+	path := writeTempConfig(t, yaml)
+	if _, _, err := Load(path); err == nil {
+		t.Fatal("expected error when permissions.path lacks {user_id}")
+	}
+}
+
+func TestLoad_PermissionsRejectsInvalidMethod(t *testing.T) {
+	yaml := `
+targets:
+  - name: "api"
+    url: "http://api:9001"
+permissions:
+  enabled: true
+  service_url: "http://perm"
+  method: "GE T"
+`
+	path := writeTempConfig(t, yaml)
+	if _, _, err := Load(path); err == nil {
+		t.Fatal("expected error for permissions.method with whitespace")
+	}
+}
+
+func TestValidate_PermissionsRejectsEmptyMethod(t *testing.T) {
+	cfg := &Config{
+		Targets: []TargetConfig{{Name: "api", URL: "http://api:9001"}},
+		Permissions: PermissionsConfig{
+			Enabled:    true,
+			ServiceURL: "http://perm",
+			Path:       "/api/v1/users/{user_id}/effective-permissions",
+			Method:     "",
+		},
+	}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for empty permissions.method")
+	}
+}
