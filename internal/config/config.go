@@ -323,7 +323,7 @@ func unknownYAMLKeys(root *yaml.Node) []string {
 // collectUnknownKeys рекурсивно сверяет узлы YAML со структурой typ.
 // path — точечный путь от корня; warnings пополняется неизвестными ключами.
 func collectUnknownKeys(node *yaml.Node, typ reflect.Type, path string, warnings *[]string, seen map[string]bool) {
-	for typ.Kind() == reflect.Ptr {
+	for typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
 	}
 
@@ -374,7 +374,7 @@ func yamlFields(typ reflect.Type) map[string]reflect.Type {
 		if name == "" {
 			if field.Anonymous || strings.Contains(opts, "inline") {
 				embedded := field.Type
-				for embedded.Kind() == reflect.Ptr {
+				for embedded.Kind() == reflect.Pointer {
 					embedded = embedded.Elem()
 				}
 				if embedded.Kind() == reflect.Struct {
