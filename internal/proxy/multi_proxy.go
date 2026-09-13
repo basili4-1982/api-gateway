@@ -536,8 +536,8 @@ func (mp *MultiProxy) modifyRequest(r *http.Request, targetCfg *config.TargetCon
 			}
 			return nil
 		}
-		if rule != nil && rule.Auth != nil && len(rule.Auth.Roles) > 0 {
-			if err := mp.checkRoles(claims, rule.Auth.Roles); err != nil {
+		if rule != nil && rule.Auth != nil && (len(rule.Auth.Roles) > 0 || len(rule.Auth.RolesAll) > 0) {
+			if err := mp.checkRoles(claims, rule.Auth.Roles, rule.Auth.RolesAll); err != nil {
 				return err
 			}
 		}
@@ -595,33 +595,73 @@ func (mp *MultiProxy) modifyRequest(r *http.Request, targetCfg *config.TargetCon
 	return nil
 }
 
-func (mp *MultiProxy) checkRoles(claims jwt.MapClaims, requiredRoles []string) error {
-	rolesRaw, ok := claims["roles"]
-	if !ok {
-		return fmt.Errorf("missing roles claim")
+// checkRoles проверяет роли из claims по схеме
+// (any of anyOf) AND (all of allOf). Пустые оба списка — проверка не нужна.
+// Отсутствующий, не строковый/не массивный claim или массив с нестроковыми
+// элементами трактуется как ошибка (fail closed), чтобы защищённый роут
+// нельзя было обойти подделкой формы claim.
+func (mp *MultiProxy) checkRoles(claims jwt.MapClaims, anyOf, allOf []string) error {
+	if len(anyOf) == 0 && len(allOf) == 0 {
+		return nil
 	}
 
-	roles, ok := rolesRaw.([]interface{})
-	if !ok {
-		if roleStr, ok := rolesRaw.(string); ok {
-			roles = []interface{}{roleStr}
-		} else {
-			return fmt.Errorf("invalid roles format")
+	roleSet, err := extractRoles(claims)
+	if err != nil {
+		return err
+	}
+
+	if len(anyOf) > 0 {
+		found := false
+		for _, required := range anyOf {
+			if roleSet[required] {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("missing any required role: %s", strings.Join(anyOf, ", "))
 		}
 	}
 
-	roleSet := make(map[string]bool, len(roles))
-	for _, r := range roles {
-		roleSet[fmt.Sprintf("%v", r)] = true
-	}
-
-	for _, required := range requiredRoles {
+	for _, required := range allOf {
 		if !roleSet[required] {
 			return fmt.Errorf("missing required role: %s", required)
 		}
 	}
 
 	return nil
+}
+
+// extractRoles разбирает claim "roles" в множество ролей. Claim может быть
+// одной строкой или массивом строк; любая другая форма — ошибка.
+func extractRoles(claims jwt.MapClaims) (map[string]bool, error) {
+	raw, ok := claims["roles"]
+	if !ok {
+		return nil, fmt.Errorf("missing roles claim")
+	}
+
+	switch v := raw.(type) {
+	case string:
+		return map[string]bool{v: true}, nil
+	case []string:
+		set := make(map[string]bool, len(v))
+		for _, role := range v {
+			set[role] = true
+		}
+		return set, nil
+	case []interface{}:
+		set := make(map[string]bool, len(v))
+		for _, item := range v {
+			role, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("invalid roles claim: non-string element %T", item)
+			}
+			set[role] = true
+		}
+		return set, nil
+	default:
+		return nil, fmt.Errorf("invalid roles claim format: %T", raw)
+	}
 }
 
 // proxyRequest выполняет проксирование запроса
