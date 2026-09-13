@@ -20,6 +20,15 @@ type Client struct {
 }
 
 func NewClient(baseURL, apiKey, apiKeyHeader, method, pathTemplate string) *Client {
+	if method == "" {
+		method = http.MethodGet
+	}
+	if pathTemplate == "" {
+		pathTemplate = "/api/v1/users/{user_id}/effective-permissions"
+	}
+	if apiKeyHeader == "" {
+		apiKeyHeader = "X-API-Key"
+	}
 	return &Client{
 		baseURL:      baseURL,
 		apiKey:       apiKey,
