@@ -39,7 +39,7 @@ jwt:
   algorithm: "HS256"
 `
 	path := writeTempConfig(t, yaml)
-	cfg, err := Load(path)
+	cfg, _, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -58,7 +58,7 @@ server:
 targets: []
 `
 	path := writeTempConfig(t, yaml)
-	_, err := Load(path)
+	_, _, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for empty targets")
 	}
@@ -73,7 +73,7 @@ targets:
     url: "http://localhost:9002"
 `
 	path := writeTempConfig(t, yaml)
-	_, err := Load(path)
+	_, _, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for duplicate target name")
 	}
@@ -92,7 +92,7 @@ headers:
   strip_authorization: true
 `
 	path := writeTempConfig(t, yaml)
-	cfg, err := Load(path)
+	cfg, _, err := Load(path)
 	if err != nil {
 		t.Fatalf("config with removed headers.forward_headers must still load: %v", err)
 	}
@@ -108,7 +108,7 @@ targets:
     url: "http://[::1"
 `
 	path := writeTempConfig(t, yaml)
-	if _, err := Load(path); err == nil {
+	if _, _, err := Load(path); err == nil {
 		t.Fatal("expected error for malformed target URL")
 	}
 }
@@ -130,7 +130,7 @@ routing:
       target_name: "auth"
 `
 	path := writeTempConfig(t, yaml)
-	cfg, err := Load(path)
+	cfg, _, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ routing:
       methods: ["GET"]
 `
 	path := writeTempConfig(t, yaml)
-	cfg, err := Load(path)
+	cfg, _, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ targets:
     url: "http://api:9001"
 `
 	path := writeTempConfig(t, yaml)
-	cfg, err := Load(path)
+	cfg, _, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ tls:
   email: "admin@example.com"
 `
 	path := writeTempConfig(t, yaml)
-	cfg, err := Load(path)
+	cfg, _, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ tls:
   email: "admin@example.com"
 `
 	path := writeTempConfig(t, yaml)
-	_, err := Load(path)
+	_, _, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for TLS without domains")
 	}
@@ -252,7 +252,7 @@ tls:
     - "api.example.com"
 `
 	path := writeTempConfig(t, yaml)
-	_, err := Load(path)
+	_, _, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for TLS without email")
 	}
@@ -264,7 +264,7 @@ discovery:
   enabled: true
 `
 	path := writeTempConfig(t, yaml)
-	cfg, err := Load(path)
+	cfg, _, err := Load(path)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -307,7 +307,7 @@ discovery:
   enabled: true
 `
 	path := writeTempConfig(t, yaml)
-	cfg, err := Load(path)
+	cfg, _, err := Load(path)
 	if err != nil {
 		t.Fatalf("empty targets must be allowed with discovery enabled: %v", err)
 	}
@@ -321,7 +321,7 @@ func TestDiscovery_StillRequiresTargetsWhenDisabled(t *testing.T) {
 targets: []
 `
 	path := writeTempConfig(t, yaml)
-	if _, err := Load(path); err == nil {
+	if _, _, err := Load(path); err == nil {
 		t.Fatal("expected error for empty targets without discovery")
 	}
 }
@@ -334,7 +334,7 @@ discovery:
   provider: nomad
 `
 	path := writeTempConfig(t, yaml)
-	if _, err := Load(path); err == nil {
+	if _, _, err := Load(path); err == nil {
 		t.Fatal("expected error for unknown provider")
 	}
 }
@@ -347,7 +347,7 @@ discovery:
   provider: podman
 `
 	path := writeTempConfig(t, yaml)
-	if _, err := Load(path); err != nil {
+	if _, _, err := Load(path); err != nil {
 		t.Fatalf("podman provider must be accepted: %v", err)
 	}
 }
@@ -359,7 +359,7 @@ targets:
     url: "http://api:9001"
 `
 	path := writeTempConfig(t, yaml)
-	cfg, err := Load(path)
+	cfg, _, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ targets:
     url: "http://api:9001"
 `
 	path := writeTempConfig(t, yaml)
-	cfg, err := Load(path)
+	cfg, _, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +391,7 @@ func TestLoad_LoggingFormatAccepted(t *testing.T) {
 		t.Run(format, func(t *testing.T) {
 			yaml := "targets:\n  - name: \"api\"\n    url: \"http://api:9001\"\nlogging:\n  format: \"" + format + "\"\n"
 			path := writeTempConfig(t, yaml)
-			if _, err := Load(path); err != nil {
+			if _, _, err := Load(path); err != nil {
 				t.Fatalf("logging.format %q must be accepted: %v", format, err)
 			}
 		})
@@ -407,7 +407,7 @@ logging:
   format: "xml"
 `
 	path := writeTempConfig(t, yaml)
-	_, err := Load(path)
+	_, _, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for unknown logging.format")
 	}
@@ -423,7 +423,7 @@ targets:
     url: "http://api:9001"
 `
 	path := writeTempConfig(t, yaml)
-	cfg, err := Load(path)
+	cfg, _, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,7 +444,7 @@ targets:
     url: "http://api:9001"
 `
 	path := writeTempConfig(t, yaml)
-	cfg, err := Load(path)
+	cfg, _, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,11 +462,181 @@ targets:
     url: "http://api:9001"
 `
 	path := writeTempConfig(t, yaml)
-	cfg, err := Load(path)
+	cfg, _, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := cfg.Server.EffectiveMaxRequestBodySize(); got != 1048576 {
 		t.Errorf("explicit max_request_body_size effective = %d, want 1048576", got)
+	}
+}
+
+func hasWarning(warnings []string, want string) bool {
+	for _, w := range warnings {
+		if w == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestLoad_WarnsOnUnknownKeys(t *testing.T) {
+	yaml := `
+bogus_top: true
+server:
+  port: 8080
+  bogus_nested: 1
+headers:
+  forward_headers: true
+targets:
+  - name: "api"
+    url: "http://api:9001"
+    bogus_target: x
+`
+	path := writeTempConfig(t, yaml)
+	_, warnings, err := Load(path)
+	if err != nil {
+		t.Fatalf("unknown keys must not fail loading: %v", err)
+	}
+	for _, want := range []string{"bogus_top", "server.bogus_nested", "headers.forward_headers", "targets.bogus_target"} {
+		if !hasWarning(warnings, want) {
+			t.Errorf("expected warning %q, got %v", want, warnings)
+		}
+	}
+}
+
+func TestLoad_NoWarningsOnFullyTaggedConfig(t *testing.T) {
+	yaml := `
+application:
+  env: "dev"
+  health_check: true
+  circuit_breaker: true
+  metrics_enabled: false
+  metrics_allowed_ips: ["10.0.0.1"]
+  max_idle_conns_per_host: 100
+server:
+  port: 8080
+  read_timeout: 5s
+  write_timeout: 10s
+  idle_timeout: 120s
+  max_request_body_size: 1048576
+tls:
+  enabled: false
+  port: 443
+  http_port: 80
+  domains: ["api.example.com"]
+  email: "admin@example.com"
+  cache_dir: "/var/lib/api-gateway/certs"
+  staging: false
+  redirect_http: true
+  directory_url: ""
+static:
+  apps:
+    - path_prefix: "/"
+      root_dir: "/srv"
+      index_file: "index.html"
+      max_age: 60
+  skip_prefixes: ["/api"]
+targets:
+  - name: "api"
+    url: "http://api:9001"
+    timeout: 5s
+    path_prefix: "/api"
+    strip_prefix: true
+    weight: 1
+    health_check: "/health"
+jwt:
+  secret_key: "secret"
+  public_key_file: ""
+  algorithm: "HS256"
+  validate_exp: true
+  validate_iss: false
+  expected_iss: ""
+  validate_aud: false
+  expected_aud: ""
+  claim_mappings: ["sub"]
+  required: false
+basic_auth:
+  enabled: false
+  username: "u"
+  password: "p"
+  skip_paths: ["/health"]
+logging:
+  level: "info"
+  format: "json"
+  access_log: false
+headers:
+  strip_authorization: true
+  claim_to_header:
+    sub: "X-User-ID"
+  add_headers:
+    X-Gateway: "v1"
+  sign_header: "X-Sign"
+  cors:
+    enabled: true
+    allowed_origins: ["*"]
+    allowed_methods: ["GET"]
+    allowed_headers: ["Authorization"]
+    expose_headers: ["X-User-ID"]
+    max_age: 60
+routing:
+  rules:
+    - host: "api.example.com"
+      path_prefix: "/api"
+      target_name: "api"
+      methods: ["GET"]
+      strip_path: true
+      auth:
+        required: true
+        roles: ["admin"]
+        strip_token: false
+      rate_limit:
+        requests_per_second: 10
+        burst: 20
+  global_limit:
+    requests_per_second: 100
+    burst: 200
+permissions:
+  enabled: false
+  service_url: "http://perm"
+  cache_ttl: 60s
+  header_name: "X-Perm"
+  invalidate_token: "t"
+  api_key: "k"
+webhooks:
+  - name: "wh"
+    transport: "webhook"
+    nats_url: ""
+    subject: ""
+    webhook_url: "http://hook"
+    trigger: "on_response"
+    methods: ["POST"]
+    on_status_codes: [200]
+    exclude_paths: ["/health"]
+    async: false
+    include_request_body: true
+    include_response_body: false
+    batch_size: 10
+    flush_interval: 100ms
+discovery:
+  enabled: false
+  provider: "docker"
+  host: "unix:///var/run/docker.sock"
+  api_version: "v1.41"
+  label_prefix: "gateway"
+  service_name_labels: ["a"]
+  network: "net"
+  debounce: 1s
+  resync_interval: 1m
+  default_timeout: 1s
+  state_file: "/tmp/state.json"
+`
+	path := writeTempConfig(t, yaml)
+	_, warnings, err := Load(path)
+	if err != nil {
+		t.Fatalf("fully tagged valid config must load: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("expected no unknown-key warnings, got %v", warnings)
 	}
 }
