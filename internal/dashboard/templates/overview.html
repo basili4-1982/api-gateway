@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API Gateway Dashboard</title>
+{{if gt .RefreshSeconds 0}}<meta http-equiv="refresh" content="{{.RefreshSeconds}}">{{end}}
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --panel-2: #273449;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --err: #f87171;
+    --border: #334155;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  h1 { font-size: 22px; margin: 0; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); margin: 0 0 12px; }
+  h3 { font-size: 13px; color: var(--muted); margin: 18px 0 8px; }
+  .muted { color: var(--muted); }
+  main { display: grid; gap: 16px; }
+  section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+  }
+  .banner { border-radius: 10px; padding: 12px 16px; margin-bottom: 16px; border: 1px solid var(--border); }
+  .banner.error { background: rgba(248,113,113,.12); border-color: var(--err); }
+  .banner ul { margin: 8px 0 0; padding-left: 20px; }
+  .cards { display: flex; flex-wrap: wrap; gap: 10px; }
+  .card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    min-width: 120px;
+  }
+  .card .label { display: block; color: var(--muted); font-size: 12px; }
+  .card .value { display: block; font-size: 20px; font-weight: 600; margin-top: 2px; }
+  .ok { color: var(--ok); }
+  .warn { color: var(--warn); }
+  .err { color: var(--err); }
+  table { width: 100%; border-collapse: collapse; margin-top: 4px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  tr:last-child td { border-bottom: none; }
+  code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  .empty { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <h1>API Gateway Dashboard</h1>
+  <span class="muted">обновлено {{.GeneratedAt.Format "2006-01-02 15:04:05"}}</span>
+</header>
+
+{{if .Errors}}
+<div class="banner error">
+  <strong>Ошибки источников данных</strong>
+  <ul>{{range .Errors}}<li>{{.}}</li>{{end}}</ul>
+</div>
+{{end}}
+
+<main>
+  <section>
+    <h2>Конфигурация</h2>
+    {{if .Config}}
+    <div class="cards">
+      <div class="card"><span class="label">Порт</span><span class="value">{{.Config.Port}}</span></div>
+      <div class="card"><span class="label">TLS</span><span class="value {{if .Config.TLSEnabled}}ok{{else}}muted{{end}}">{{if .Config.TLSEnabled}}вкл{{else}}выкл{{end}}</span></div>
+      <div class="card"><span class="label">Discovery</span><span class="value {{if .Config.DiscoveryEnabled}}ok{{else}}muted{{end}}">{{if .Config.DiscoveryEnabled}}вкл{{else}}выкл{{end}}</span></div>
+      <div class="card"><span class="label">Permissions</span><span class="value {{if .Config.PermissionsEnabled}}ok{{else}}muted{{end}}">{{if .Config.PermissionsEnabled}}вкл{{else}}выкл{{end}}</span></div>
+      <div class="card"><span class="label">Таргеты</span><span class="value">{{.Config.TargetCount}}</span></div>
+      <div class="card"><span class="label">Правила</span><span class="value">{{.Config.RuleCount}}</span></div>
+      <div class="card"><span class="label">Вебхуки</span><span class="value">{{.Config.WebhookCount}}</span></div>
+    </div>
+    {{if .Config.WebhookTransports}}
+      <h3>Транспорты вебхуков</h3>
+      <p>{{range .Config.WebhookTransports}}<code>{{.}}</code> {{end}}</p>
+    {{end}}
+    {{if .Config.Warnings}}
+      <h3>Предупреждения конфигурации</h3>
+      <ul>{{range .Config.Warnings}}<li><code>{{.}}</code></li>{{end}}</ul>
+    {{end}}
+    <h3>Таргеты (static)</h3>
+    {{if .Config.Targets}}
+    <table>
+      <thead><tr><th>Имя</th><th>URL</th><th>Префикс</th><th>Вес</th><th>Таймаут</th></tr></thead>
+      <tbody>{{range .Config.Targets}}<tr><td>{{.Name}}</td><td><code>{{.URL}}</code></td><td>{{.PathPrefix}}</td><td>{{.Weight}}</td><td>{{.Timeout}}</td></tr>{{end}}</tbody>
+    </table>
+    {{else}}<p class="empty">нет статических таргетов</p>{{end}}
+    <h3>Правила маршрутизации</h3>
+    {{if .Config.Rules}}
+    <table>
+      <thead><tr><th>Host</th><th>Префикс</th><th>Таргет</th><th>Методы</th><th>Auth</th><th>Rate limit</th></tr></thead>
+      <tbody>{{range .Config.Rules}}<tr><td>{{if .Host}}{{.Host}}{{else}}<span class="muted">*</span>{{end}}</td><td>{{.PathPrefix}}</td><td>{{.TargetName}}</td><td>{{range .Methods}}<code>{{.}}</code> {{end}}</td><td>{{if .Auth}}да{{else}}нет{{end}}</td><td>{{if .RateLimit}}да{{else}}нет{{end}}</td></tr>{{end}}</tbody>
+    </table>
+    {{else}}<p class="empty">нет правил</p>{{end}}
+    {{else}}
+    <p class="empty">Конфигурация недоступна.</p>
+    {{end}}
+  </section>
+
+  <section>
+    <h2>Discovery state</h2>
+    {{if .Discovery}}
+    <p class="muted">Файл: <code>{{.Discovery.StateFile}}</code>{{if not .Discovery.ModTime.IsZero}} · изменён {{.Discovery.ModTime.Format "2006-01-02 15:04:05"}}{{end}}</p>
+    <h3>Обнаруженные таргеты ({{len .Discovery.Targets}})</h3>
+    {{if .Discovery.Targets}}
+    <table>
+      <thead><tr><th>Имя</th><th>URL</th><th>Префикс</th><th>Вес</th><th>Таймаут</th></tr></thead>
+      <tbody>{{range .Discovery.Targets}}<tr><td>{{.Name}}</td><td><code>{{.URL}}</code></td><td>{{.PathPrefix}}</td><td>{{.Weight}}</td><td>{{.Timeout}}</td></tr>{{end}}</tbody>
+    </table>
+    {{else}}<p class="empty">нет обнаруженных таргетов</p>{{end}}
+    <h3>Обнаруженные правила ({{len .Discovery.Rules}})</h3>
+    {{if .Discovery.Rules}}
+    <table>
+      <thead><tr><th>Host</th><th>Префикс</th><th>Таргет</th><th>Методы</th></tr></thead>
+      <tbody>{{range .Discovery.Rules}}<tr><td>{{if .Host}}{{.Host}}{{else}}<span class="muted">*</span>{{end}}</td><td>{{.PathPrefix}}</td><td>{{.TargetName}}</td><td>{{range .Methods}}<code>{{.}}</code> {{end}}</td></tr>{{end}}</tbody>
+    </table>
+    {{else}}<p class="empty">нет обнаруженных правил</p>{{end}}
+    {{else}}
+    <p class="empty">Источник отключён или недоступен.</p>
+    {{end}}
+  </section>
+
+  <section>
+    <h2>Метрики</h2>
+    {{if .Metrics}}
+    <div class="cards">
+      <div class="card"><span class="label">Активные запросы</span><span class="value">{{.Metrics.ActiveRequests}}</span></div>
+      <div class="card"><span class="label">Отказы rate limit</span><span class="value">{{.Metrics.RateLimitDenials}}</span></div>
+    </div>
+    <h3>Запросы по методу/пути/статусу</h3>
+    {{if .Metrics.RequestsTotal}}
+    <table>
+      <thead><tr><th>Ключ</th><th>Всего</th></tr></thead>
+      <tbody>{{range $key, $val := .Metrics.RequestsTotal}}<tr><td><code>{{$key}}</code></td><td>{{$val}}</td></tr>{{end}}</tbody>
+    </table>
+    {{else}}<p class="empty">нет данных</p>{{end}}
+    <h3>Суммарная длительность (мс)</h3>
+    {{if .Metrics.RequestDurationMS}}
+    <table>
+      <thead><tr><th>Ключ</th><th>мс</th></tr></thead>
+      <tbody>{{range $key, $val := .Metrics.RequestDurationMS}}<tr><td><code>{{$key}}</code></td><td>{{$val}}</td></tr>{{end}}</tbody>
+    </table>
+    {{else}}<p class="empty">нет данных</p>{{end}}
+    {{else}}
+    <p class="empty">Источник отключён или недоступен.</p>
+    {{end}}
+  </section>
+</main>
+</body>
+</html>

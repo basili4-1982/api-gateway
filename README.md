@@ -259,6 +259,114 @@ docker run -p 8080:8080 \
   api-gateway
 ```
 
+## Дашборд
+
+Отдельный read-only бинарник `cmd/dashboard` показывает сводку конфигурации,
+последнее сохранённое состояние service discovery и живые метрики гейтвея.
+Гейтвей при этом не изменяется и не требует перезапуска.
+
+```bash
+# Сборка и запуск локально
+make dashboard
+make dashboard-run \
+  CONFIG=config.local.yaml \
+  DASHBOARD_DISCOVERY_STATE=/var/lib/api-gateway/discovery-state.json
+```
+
+Эндпоинты: `GET /` — HTML-обзор, `GET /api/status` — тот же снимок в JSON,
+`GET /healthz` — `200 ok`.
+
+### Флаги
+
+| Флаг | По умолчанию | Назначение |
+|------|--------------|------------|
+| `-config` | `/etc/proxy/config.yaml` | конфиг гейтвея для сводки |
+| `-discovery-state` | пусто | файл `discovery.state_file`; пусто — панель выключена |
+| `-metrics-url` | `http://127.0.0.1:8080/metrics` | `/metrics` гейтвея; пусто — панель выключена |
+| `-listen` | `127.0.0.1:8081` | адрес дашборда |
+| `-refresh` | `5s` | интервал авто-обновления HTML |
+| `-basic-auth` | пусто | `user:password`; защищает все маршруты |
+
+### Источники данных и деградация
+
+Каждый запрос перечитывает источники заново. Если один из них недоступен
+(нет файла, битый JSON, гейтвей не отвечает), страница всё равно отрисовывается
+с баннером ошибки, а остальные панели продолжают работать. Дашборд стартует
+даже при невалидном конфиге гейтвея.
+
+Секреты (`jwt.secret_key`, `basic_auth.password`, `permissions.api_key`,
+`permissions.invalidate_token`) никогда не отображаются; URL с userinfo
+редактируются. Учётные данные из URL не попадают и в текст ошибок панели.
+
+### Панель метрик
+
+Панель метрик работает, только если у гейтвея включён
+`application.metrics_enabled: true` и `-metrics-url` дашборда указывает на
+доступный `/metrics`. Если `metrics_enabled` выключен, `/metrics` не отвечает,
+и панель показывает ошибку.
+
+Если у гейтвея включён глобальный `basic_auth`, он защищает и `/metrics`.
+Тогда либо добавьте `/metrics` в `basic_auth.skip_paths`, либо разрешите IP
+дашборда в `application.metrics_allowed_ips` (можно и то, и другое). Иначе
+запрос дашборда получит `401`, и панель покажет ошибку.
+
+```yaml
+application:
+  metrics_enabled: true
+  metrics_allowed_ips: ["10.0.0.5"]   # IP дашборда
+basic_auth:
+  enabled: true
+  username: admin
+  password: ${GATEWAY_BASIC_AUTH_PASSWORD}
+  skip_paths: ["/health", "/metrics"] # либо пропуск Basic Auth для /metrics
+```
+
+По умолчанию дашборд слушает loopback. В контейнере задайте `-listen :8081` и
+ограничьте сетевой доступ либо включите `-basic-auth`.
+
+### Docker Compose
+
+Дашборд читает тот же конфиг гейтвея через `config.Load`, а тот раскрывает
+`${VAR}` и **падает, если переменная не задана или пуста**. Поэтому у процесса
+дашборда должны быть те же переменные окружения, что у гейтвея. Если переменные
+передавать нежелательно, смонтируйте конфиг без `${VAR}` — с уже подставленными
+значениями.
+
+```yaml
+services:
+  api-gateway:
+    image: api-gateway
+    volumes:
+      - ./config.yaml:/etc/proxy/config.yaml:ro
+      - gateway-state:/var/lib/api-gateway
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    # config.Load раскрывает ${VAR}: передайте те же переменные, что и гейтвею,
+    # либо смонтируйте конфиг без ${VAR}. Иначе панель конфига покажет ошибку
+    # "config references undefined environment variable(s): ...".
+    environment:
+      - GATEWAY_BASIC_AUTH_PASSWORD=${GATEWAY_BASIC_AUTH_PASSWORD}
+    command:
+      - -config=/etc/proxy/config.yaml
+      - -discovery-state=/var/lib/api-gateway/discovery-state.json
+      - -metrics-url=http://api-gateway:8080/metrics
+      - -listen=:8081
+      - -basic-auth=admin:${DASHBOARD_PASSWORD}
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - ./config.yaml:/etc/proxy/config.yaml:ro
+      - gateway-state:/var/lib/api-gateway:ro
+
+volumes:
+  gateway-state:
+```
+
+Образ собирается отдельно: `docker build -f Dockerfile.dashboard -t api-gateway-dashboard .`
+
 ## Разработка
 
 ```bash
