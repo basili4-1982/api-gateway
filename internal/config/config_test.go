@@ -733,6 +733,7 @@ routing:
       auth:
         required: true
         roles: ["admin"]
+        roles_all: ["mfa"]
         strip_token: false
       rate_limit:
         requests_per_second: 10
@@ -782,5 +783,39 @@ discovery:
 	}
 	if len(warnings) != 0 {
 		t.Errorf("expected no unknown-key warnings, got %v", warnings)
+	}
+}
+
+func TestLoad_AuthRolesAll(t *testing.T) {
+	yaml := `
+targets:
+  - name: "api"
+    url: "http://api:9001"
+routing:
+  rules:
+    - path_prefix: "/api"
+      target_name: "api"
+      auth:
+        required: true
+        roles: ["admin", "support"]
+        roles_all: ["mfa", "verified"]
+`
+	path := writeTempConfig(t, yaml)
+	cfg, warnings, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("expected no unknown-key warnings, got %v", warnings)
+	}
+	auth := cfg.Routing.Rules[0].Auth
+	if auth == nil {
+		t.Fatal("expected auth block")
+	}
+	if len(auth.Roles) != 2 || auth.Roles[0] != "admin" {
+		t.Errorf("roles: got %v", auth.Roles)
+	}
+	if len(auth.RolesAll) != 2 || auth.RolesAll[0] != "mfa" {
+		t.Errorf("roles_all: got %v", auth.RolesAll)
 	}
 }
