@@ -486,7 +486,7 @@ routing:
   rules:
 `
 	cases := []struct {
-		name string
+		name  string
 		ruleA string
 		ruleB string
 	}{
