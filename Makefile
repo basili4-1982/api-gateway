@@ -5,7 +5,7 @@ CONFIG   ?= /etc/proxy/config.yaml
 GO       ?= go
 GOLANGCI ?= golangci-lint
 
-.PHONY: all build run test lint coverage clean docker-build fmt vet
+.PHONY: all build run check test lint coverage clean docker-build fmt vet
 
 all: fmt vet lint build test
 
@@ -14,6 +14,9 @@ build:
 
 run: build
 	./$(BIN_DIR)/$(BINARY) -config $(CONFIG)
+
+check: build
+	./$(BIN_DIR)/$(BINARY) -config $(CONFIG) -check
 
 test:
 	$(GO) test -v -race -count=1 -coverprofile=$(BIN_DIR)/coverage.out ./...

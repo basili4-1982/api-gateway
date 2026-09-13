@@ -44,9 +44,30 @@ Traefik `forwardAuth` — **89–94 %**. Пик памяти под c300 — 121
 cp config.local.example.yaml config.local.yaml
 # Отредактировать config.local.yaml — указать свои сервисы и секрет для JWT
 
+# Проверить конфиг, не запуская гейтвей
+go run ./cmd/ -config config.local.yaml -check
+
 # Запуск
 go run ./cmd/ -config config.local.yaml
 ```
+
+### Проверка конфигурации
+
+Флаг `-check` загружает и валидирует конфиг, печатает предупреждения и ошибки и завершается с кодом `0` (валиден) или `1` (ошибка). Гейтвей при этом не запускается — удобно для CI и перед деплоем.
+
+```bash
+api-gateway -config /etc/proxy/config.yaml -check
+# config OK: /etc/proxy/config.yaml
+#   targets: 3, routing rules: 8, discovery: true, permissions: false
+```
+
+Флаг `-strict` дополнительно считает ошибкой предупреждения о неизвестных ключах:
+
+```bash
+api-gateway -config /etc/proxy/config.yaml -check -strict
+```
+
+В контейнере: `docker run --rm -v ./config.yaml:/etc/proxy/config.yaml ghcr.io/sarnas-it/api-gateway:latest -check`.
 
 ## Конфигурация
 

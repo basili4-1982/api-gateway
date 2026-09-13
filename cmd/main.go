@@ -21,7 +21,13 @@ import (
 
 func main() {
 	configPath := flag.String("config", "/etc/proxy/config.yaml", "path to config file")
+	check := flag.Bool("check", false, "validate config and exit (0 = valid, 1 = invalid)")
+	strict := flag.Bool("strict", false, "with -check: treat unknown-key warnings as errors")
 	flag.Parse()
+
+	if *check {
+		os.Exit(runCheck(*configPath, *strict, os.Stdout, os.Stderr))
+	}
 
 	// pprof — только если явно включён через env, наружу не слушает по умолчанию.
 	if addr := os.Getenv("PPROF_ADDR"); addr != "" {
