@@ -18,7 +18,7 @@ type Manager struct {
 
 func NewManager(cfg *config.PermissionsConfig, logger *zap.Logger) *Manager {
 	return &Manager{
-		client: NewClient(cfg.ServiceURL, cfg.APIKey),
+		client: NewClient(cfg.ServiceURL, cfg.APIKey, cfg.APIKeyHeader, cfg.Method, cfg.Path),
 		cache:  NewCache(cfg.CacheTTL),
 		logger: logger,
 		cfg:    cfg,

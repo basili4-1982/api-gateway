@@ -204,11 +204,20 @@ type CORSConfig struct {
 type PermissionsConfig struct {
 	Enabled         bool          `yaml:"enabled"`
 	ServiceURL      string        `yaml:"service_url"`
+	Method          string        `yaml:"method"`
+	Path            string        `yaml:"path"`
 	CacheTTL        time.Duration `yaml:"cache_ttl"`
 	HeaderName      string        `yaml:"header_name"`
 	InvalidateToken string        `yaml:"invalidate_token"`
 	APIKey          string        `yaml:"api_key"`
+	APIKeyHeader    string        `yaml:"api_key_header"`
 }
+
+const (
+	defaultPermissionsMethod       = "GET"
+	defaultPermissionsPath         = "/api/v1/users/{user_id}/effective-permissions"
+	defaultPermissionsAPIKeyHeader = "X-API-Key"
+)
 
 // HeadersConfig конфигурация заголовков
 type HeadersConfig struct {
@@ -497,6 +506,16 @@ func (c *Config) setDefaults() {
 		}
 	}
 
+	if c.Permissions.Method == "" {
+		c.Permissions.Method = defaultPermissionsMethod
+	}
+	if c.Permissions.Path == "" {
+		c.Permissions.Path = defaultPermissionsPath
+	}
+	if c.Permissions.APIKeyHeader == "" {
+		c.Permissions.APIKeyHeader = defaultPermissionsAPIKeyHeader
+	}
+
 	// Дефолты discovery применяются, только когда discovery включён; пустая
 	// секция `discovery:` с `enabled: true` получает все значения ниже.
 	if c.Discovery != nil && c.Discovery.Enabled {
@@ -537,6 +556,20 @@ func (c *Config) setDefaults() {
 // Validate проверяет корректность конфигурации (публичная обёртка для discovery).
 func (c *Config) Validate() error {
 	return c.validate()
+}
+
+// validHTTPMethodToken reports whether m is a non-empty HTTP method token,
+// rejecting whitespace and control characters.
+func validHTTPMethodToken(m string) bool {
+	if m == "" {
+		return false
+	}
+	for _, r := range m {
+		if r <= ' ' || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // validate проверяет корректность конфигурации
@@ -636,8 +669,16 @@ func (c *Config) validate() error {
 		c.Permissions.InvalidateToken = c.Permissions.APIKey
 	}
 
-	if c.Permissions.Enabled && c.Permissions.ServiceURL == "" {
-		return fmt.Errorf("permissions.service_url is required when permissions.enabled is true")
+	if c.Permissions.Enabled {
+		if c.Permissions.ServiceURL == "" {
+			return fmt.Errorf("permissions.service_url is required when permissions.enabled is true")
+		}
+		if !strings.Contains(c.Permissions.Path, "{user_id}") {
+			return fmt.Errorf("permissions.path must contain the {user_id} placeholder, got %q", c.Permissions.Path)
+		}
+		if !validHTTPMethodToken(c.Permissions.Method) {
+			return fmt.Errorf("permissions.method must be a non-empty HTTP token without whitespace or control characters, got %q", c.Permissions.Method)
+		}
 	}
 
 	for _, wh := range c.Webhooks {

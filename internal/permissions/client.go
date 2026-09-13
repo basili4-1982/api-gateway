@@ -5,19 +5,36 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
 type Client struct {
-	baseURL    string
-	apiKey     string
-	httpClient *http.Client
+	baseURL      string
+	apiKey       string
+	apiKeyHeader string
+	method       string
+	pathTemplate string
+	httpClient   *http.Client
 }
 
-func NewClient(baseURL, apiKey string) *Client {
+func NewClient(baseURL, apiKey, apiKeyHeader, method, pathTemplate string) *Client {
+	if method == "" {
+		method = http.MethodGet
+	}
+	if pathTemplate == "" {
+		pathTemplate = "/api/v1/users/{user_id}/effective-permissions"
+	}
+	if apiKeyHeader == "" {
+		apiKeyHeader = "X-API-Key"
+	}
 	return &Client{
-		baseURL: baseURL,
-		apiKey:  apiKey,
+		baseURL:      baseURL,
+		apiKey:       apiKey,
+		apiKeyHeader: apiKeyHeader,
+		method:       method,
+		pathTemplate: pathTemplate,
 		httpClient: &http.Client{
 			Timeout: 5 * time.Second,
 		},
@@ -33,14 +50,14 @@ type UserPermissions struct {
 }
 
 func (c *Client) GetEffectivePermissions(userID int) (*UserPermissions, error) {
-	url := fmt.Sprintf("%s/api/v1/users/%d/effective-permissions", c.baseURL, userID)
+	url := c.baseURL + strings.ReplaceAll(c.pathTemplate, "{user_id}", strconv.Itoa(userID))
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequest(c.method, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	if c.apiKey != "" {
-		req.Header.Set("X-API-Key", c.apiKey)
+		req.Header.Set(c.apiKeyHeader, c.apiKey)
 	}
 
 	resp, err := c.httpClient.Do(req)
