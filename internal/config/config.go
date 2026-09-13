@@ -569,6 +569,7 @@ func (c *Config) validate() error {
 	}
 
 	// Проверяем правила маршрутизации
+	poolPolicy := make(map[string]RoutingRule)
 	for _, rule := range c.Routing.Rules {
 		if rule.PathPrefix == "" {
 			return fmt.Errorf("routing rule path_prefix is required")
@@ -576,6 +577,20 @@ func (c *Config) validate() error {
 		if !targetNames[rule.TargetName] {
 			return fmt.Errorf("routing rule references unknown target: %s", rule.TargetName)
 		}
+		// Правила, совпадающие по (host, path_prefix, methods), делят один пул
+		// балансировки. Политика пула (auth, strip_path, rate_limit) должна
+		// совпадать, иначе поведение запроса зависело бы от выбранного таргета.
+		key := RuleRouteKey(rule)
+		if first, ok := poolPolicy[key]; ok {
+			if first.StripPath != rule.StripPath ||
+				!reflect.DeepEqual(first.Auth, rule.Auth) ||
+				!reflect.DeepEqual(first.RateLimit, rule.RateLimit) {
+				return fmt.Errorf("routing rules for host %q path_prefix %q methods %v share a target pool but differ in auth, strip_path or rate_limit",
+					rule.Host, rule.PathPrefix, rule.Methods)
+			}
+			continue
+		}
+		poolPolicy[key] = rule
 	}
 
 	// Проверяем формат логирования. Пустое значение допустимо для
