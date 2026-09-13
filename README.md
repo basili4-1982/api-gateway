@@ -18,6 +18,14 @@
 - **Вебхуки/NATS** — публикация событий `on_request`/`on_response`
 - **Graceful shutdown**, структурированное логирование (Zap), метрики, трейсинг (OpenTelemetry)
 
+## Документация
+
+- [Быстрый старт](docs/api-gateway-quickstart.md) — минимальный конфиг, запуск локально и в Docker, проверка.
+- [Конфигурация](docs/api-gateway-configuration.md) — полный справочник: все секции и поля, значения по умолчанию, примеры.
+- [Сценарии](docs/api-gateway-scenarios.md) — типовые задачи: авторизация, RBAC, аудит, права, discovery, балансировка.
+
+Онлайн-версия с навигацией: [sarnas.ru/docs/api-gateway](https://sarnas.ru/docs/api-gateway).
+
 ## Производительность и воспроизводимый бенчмарк
 
 На проксировании «один роут → backend» (proxy-only, 300 соединений) `api-gateway`
@@ -42,7 +50,7 @@ go run ./cmd/ -config config.local.yaml
 
 ## Конфигурация
 
-Полный список опций — в [`config.local.example.yaml`](config.local.example.yaml).
+Полный справочник по всем полям — в [документации](docs/api-gateway-configuration.md); рабочий пример со всеми секциями — в [`config.local.example.yaml`](config.local.example.yaml).
 
 ### Пример маршрутов
 
