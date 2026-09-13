@@ -280,7 +280,92 @@ routing:
 
 ## permissions
 
-Интеграция с внешним permission-сервисом. Требует JWT с claim `id`, приводимым к целому.
+Интеграция с внешним permission-сервисом: шлюз подмешивает в проксируемый запрос заголовок с эффективными разрешениями пользователя. Модуль включается `permissions.enabled: true`; при этом `service_url` обязателен, иначе загрузка конфига завершается ошибкой `permissions.service_url is required when permissions.enabled is true`.
+
+### Как это работает
+
+```
+JWT (Authorization: Bearer / cookie cml_access)
+        │
+        ▼
+проверка подписи и claims
+        │  claim id из jwt.claim_mappings
+        ▼
+   toInt(id) ── нет claim / не приводится к int ──► заголовок не выставляется,
+        │                                            запрос идёт дальше (не 401)
+        │ ok
+        ▼
+   кеш по user_id ── hit ────────────────────────────┐
+        │ miss                                        │
+        ▼                                             │
+GET {service_url}/api/v1/users/{id}/effective-permissions
+        │                                             │
+        ├─ 200: кешируем, берём permissions ──────────┘
+        └─ иное: ошибка, заголовок не выставляется, запрос идёт дальше
+        │
+        ▼
+X-User-Permissions: "orders:read,orders:write"   (только если список непуст)
+```
+
+1. После криптографической проверки токена шлюз берёт из него claim `id`. Claim должен быть перечислен в `jwt.claim_mappings` (например `["id", "email", "roles"]`), иначе он не попадёт в извлечённый набор и заголовок не выставится.
+2. Значение `id` приводится к `int`: принимаются JSON-число (`float64`), `int` и числовая строка. Если claim отсутствует или не приводится — заголовок не выставляется, запрос продолжается без 401.
+3. При успешном приведении шлюз смотрит кеш по `user_id`. При промахе вызывается permission-сервис (см. контракт ниже), результат кладётся в кеш.
+4. Если список `permissions` непуст, выставляется заголовок `header_name` со значениями, склеенными через запятую. Пустой список заголовок не выставляет.
+5. Любая ошибка (сеть, таймаут, не-200, ошибка декодирования) логируется как `failed to set permissions header`; запрос всё равно проксируется без заголовка.
+
+Блок выполняется только при предъявленном токене, прошедшем проверку, — на анонимных запросах заголовок не появляется.
+
+### Контракт permission-сервиса
+
+Шлюз вызывает один эндпоинт:
+
+```
+GET {service_url}/api/v1/users/{user_id}/effective-permissions
+X-API-Key: {api_key}        # только если api_key задан
+```
+
+- `{user_id}` — целое число, полученное из claim `id`.
+- Заголовок `X-API-Key` добавляется, только если `api_key` непустой.
+- Таймаут HTTP-клиента — 5 секунд.
+
+Успешный ответ — HTTP 200 с JSON-объектом:
+
+```json
+{
+  "user_id": 42,
+  "permissions": ["orders:read", "orders:write", "reports:view"],
+  "inherited_from_role": ["orders:read", "reports:view"],
+  "direct_allowed": ["orders:write"],
+  "direct_denied": ["admin:all"]
+}
+```
+
+| Поле | Тип | Обязательно | Смысл |
+|---|---|---|---|
+| `user_id` | int | нет | Идентификатор пользователя |
+| `permissions` | []string | да | Итоговый список эффективных разрешений; **единственное поле, которое использует шлюз** |
+| `inherited_from_role` | []string | нет | Разрешения, унаследованные от роли |
+| `direct_allowed` | []string | нет | Разрешения, выданные пользователю напрямую |
+| `direct_denied` | []string | нет | Явно запрещённые разрешения |
+
+Шлюз читает только `permissions`, остальные поля можно не возвращать. Любой не-200 (включая 401/403/404/5xx) считается ошибкой: заголовок не выставляется, запрос продолжается. Тело ответа должно быть валидным JSON.
+
+### Кеш и инвалидация
+
+- Эффективные разрешения кешируются по `user_id` на `cache_ttl` (по умолчанию `300s`). После прогрева на одного пользователя приходится один вызов сервиса за TTL.
+- Чтобы изменения прав не «залипали» до истечения TTL, permission-сервис (или оператор) вызывает инвалидацию:
+
+```
+POST /_cache/permissions/invalidate
+X-Invalidate-Token: {invalidate_token}
+```
+
+- `?user_id=42` сбрасывает запись одного пользователя; без параметра — весь кеш.
+- Неверный или отсутствующий `X-Invalidate-Token` — 401; нечисловой `user_id` — 400.
+- Эндпоинт доступен, только когда модуль включён, и обрабатывается во внешнем слое цепочки — до Basic Auth, поэтому `basic_auth` его не защищает. Доступ ограничен только `X-Invalidate-Token`.
+- Модуль стоит на горячем пути, поэтому сервис должен отвечать быстро: кеш сводит нагрузку к одному вызову на пользователя за TTL.
+
+### Поля конфигурации
 
 | Поле | Тип | По умолчанию | Смысл и значения | Пример |
 |---|---|---|---|---|
@@ -289,9 +374,23 @@ routing:
 | `cache_ttl` | duration | `300s` | TTL кеша разрешений по пользователю | `300s` |
 | `header_name` | string | `X-User-Permissions` | Заголовок с разрешениями (через запятую) | `X-User-Permissions` |
 | `invalidate_token` | string | значение `api_key` | Токен для инвалидации кеша; если пуст — равен `api_key` | `"${INVALIDATE_TOKEN}"` |
-| `api_key` | string | `""` | API-ключ сервиса; также секрет для `headers.sign_header` | `"${PERMISSIONS_KEY}"` |
+| `api_key` | string | `""` | API-ключ сервиса (`X-API-Key`); также секрет для `headers.sign_header` | `"${PERMISSIONS_KEY}"` |
 
-Заголовок выставляется, только если у пользователя есть непустой список разрешений. Инвалидация: `POST /_cache/permissions/invalidate` с заголовком `X-Invalidate-Token`; параметр `user_id` инвалидирует одного пользователя, без него — весь кеш.
+### Пример конфигурации
+
+```yaml
+jwt:
+  secret_key: "${JWT_SECRET}"
+  claim_mappings: ["id", "email", "roles"]
+
+permissions:
+  enabled: true
+  service_url: "http://permissions:8080"
+  cache_ttl: 300s
+  header_name: "X-User-Permissions"
+  api_key: "${PERMISSIONS_KEY}"
+  invalidate_token: "${INVALIDATE_TOKEN}"
+```
 
 ## webhooks
 
@@ -314,7 +413,99 @@ routing:
 | `batch_size` | int | `0`/`1` | `>1` включает батчинг HTTP-вебхука | `1000` |
 | `flush_interval` | duration | `200ms` | Максимальная задержка перед отправкой неполной пачки | `100ms` |
 
-Событие содержит `method`, `path`, `query`, `user_id`, `user_email`, `user_roles`, `request_id`, `status_code`, `timestamp`, `changes` и `response_body`. Батчинг (`batch_size > 1`) шлёт один POST с телом `{"count":N,"events":[...]}`. Очередь батчера ограничена (8192 события); при переполнении постановка блокируется — события не теряются, но запросы замедляются (backpressure). Соединение NATS устанавливается по `nats_url` **первого** вебхука, поэтому у всех NATS-вебхуков URL должен совпадать.
+### Структура события
+
+Тело события (одно событие, а также элемент массива `events` в пачке):
+
+| Поле | Тип | Всегда | Смысл |
+|---|---|---|---|
+| `method` | string | да | HTTP-метод запроса |
+| `path` | string | да | Путь запроса |
+| `query` | string | нет | Строка запроса без `?` |
+| `user_id` | string | нет | Из заголовка `X-User-ID` (заполняется маппингом claims) |
+| `user_email` | string | нет | Из заголовка `X-User-Email` |
+| `user_roles` | string | нет | Из заголовка `X-User-Roles` (роли через запятую) |
+| `request_id` | string | да | `X-Request-ID` запроса |
+| `status_code` | int | для `on_response` | Код ответа |
+| `timestamp` | string (RFC3339) | да | Время события |
+| `changes` | object | нет | Тело запроса как JSON (если `include_request_body`, по умолчанию включено) |
+| `response_body` | object | нет | Тело ответа как JSON, до 64 KiB (если `include_response_body`) |
+
+Поля с `omitempty` (всё, кроме `method`, `path`, `request_id`, `timestamp`) отсутствуют в JSON, если пусты. `headers` зарезервировано и сейчас не заполняется. `changes` и `response_body` попадают в событие, только если тело — валидный непустой JSON-объект (для `response_body` ещё и `Content-Type: application/json`).
+
+Пример одного события (HTTP-вебхук без батчинга или сообщение NATS):
+
+```json
+{
+  "method": "POST",
+  "path": "/api/v1/admin/users",
+  "user_id": "42",
+  "user_email": "admin@example.com",
+  "user_roles": "admin",
+  "request_id": "9f2c1e7a4b3d5c60",
+  "status_code": 201,
+  "timestamp": "2026-09-13T12:34:56.789Z",
+  "changes": { "email": "new@example.com", "role": "editor" }
+}
+```
+
+Батчинг (`batch_size > 1`) шлёт один POST с телом:
+
+```json
+{
+  "count": 2,
+  "events": [
+    { "method": "POST", "path": "/api/v1/admin/users", "request_id": "…", "status_code": 201, "timestamp": "2026-09-13T12:34:56.789Z", "changes": { "role": "editor" } },
+    { "method": "GET", "path": "/api/v1/admin/users/42", "request_id": "…", "status_code": 200, "timestamp": "2026-09-13T12:34:56.812Z" }
+  ]
+}
+```
+
+Очередь батчера ограничена (8192 события); при переполнении постановка блокируется — события не теряются, но запросы замедляются (backpressure). Батчинг применяется только к HTTP-вебхукам; NATS шлёт по одному событию. Соединение NATS устанавливается по `nats_url` **первого** вебхука, поэтому у всех NATS-вебхуков URL должен совпадать.
+
+### Примеры
+
+Аудит изменений (только мутации, с телом запроса):
+
+```yaml
+webhooks:
+  - name: audit-mutations
+    transport: webhook
+    webhook_url: "https://audit.example/events"
+    trigger: on_response
+    methods: ["POST", "PUT", "PATCH", "DELETE"]
+    include_request_body: true
+    batch_size: 1000
+    flush_interval: 100ms
+    async: true
+```
+
+Аудит чтений и записей по админским путям (тело ответа включено):
+
+```yaml
+webhooks:
+  - name: audit-admin
+    transport: webhook
+    webhook_url: "https://audit.example/admin"
+    trigger: on_response
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE"]
+    include_response_body: true
+    exclude_paths: ["/health", "/metrics"]
+    async: true
+```
+
+Публикация в NATS:
+
+```yaml
+webhooks:
+  - name: audit-nats
+    transport: nats
+    nats_url: "nats://nats:4222"
+    subject: "audit.events"
+    trigger: on_response
+    methods: ["POST", "PUT", "PATCH", "DELETE"]
+    async: true
+```
 
 ## discovery
 
