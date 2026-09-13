@@ -256,7 +256,7 @@ func (w WebhookConfig) IncludeRequestBodyEnabled() bool {
 // LoggingConfig конфигурация логирования
 type LoggingConfig struct {
 	Level     string `yaml:"level"`      // debug, info, warn, error
-	Format    string `yaml:"format"`     // json или text
+	Format    string `yaml:"format"`     // json, console или text (алиас console)
 	AccessLog bool   `yaml:"access_log"` // построчный лог каждого запроса; выкл. по умолчанию (аллокации на каждый запрос)
 }
 
@@ -458,6 +458,14 @@ func (c *Config) validate() error {
 		if !targetNames[rule.TargetName] {
 			return fmt.Errorf("routing rule references unknown target: %s", rule.TargetName)
 		}
+	}
+
+	// Проверяем формат логирования. Пустое значение допустимо для
+	// программно собранных конфигов — setDefaults подставляет "text".
+	switch c.Logging.Format {
+	case "", "console", "text", "json":
+	default:
+		return fmt.Errorf("logging.format must be one of console, text, json, got %q", c.Logging.Format)
 	}
 
 	// Проверяем TLS конфигурацию
