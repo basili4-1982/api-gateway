@@ -119,8 +119,11 @@ type TargetConfig struct {
 	Timeout     time.Duration `yaml:"timeout"`      // таймаут для запросов к цели
 	PathPrefix  string        `yaml:"path_prefix"`  // какой путь проксировать (опционально)
 	StripPrefix bool          `yaml:"strip_prefix"` // удалять префикс при проксировании
-	Weight      int           `yaml:"weight"`       // для балансировки (опционально)
-	HealthCheck string        `yaml:"health_check"` // URL для проверки здоровья
+	// Weight — вес таргета при взвешенной балансировке внутри одного route-пула
+	// (правила с одинаковыми host, path_prefix и methods). Значение по умолчанию 1.
+	// Таргет с весом 0 (или отрицательным) из выбора исключается.
+	Weight      int    `yaml:"weight"`
+	HealthCheck string `yaml:"health_check"` // URL для проверки здоровья
 }
 
 // RoutingConfig конфигурация маршрутизации
@@ -438,6 +441,10 @@ func (c *Config) setDefaults() {
 		if c.Targets[i].Timeout == 0 {
 			c.Targets[i].Timeout = 30 * time.Second
 		}
+		if c.Targets[i].Weight == 0 {
+			// Дефолт для балансировки; 0 в конфиге трактуется как «не задан».
+			c.Targets[i].Weight = 1
+		}
 	}
 
 	if c.JWT.Algorithm == "" {
@@ -639,7 +646,8 @@ func (c *Config) FindTargetForPath(path string, method string, host ...string) (
 		reqHost = host[0]
 	}
 
-	for _, rule := range c.Routing.Rules {
+	for i := range c.Routing.Rules {
+		rule := &c.Routing.Rules[i]
 		// Проверяем Host, если указан
 		if rule.Host != "" {
 			if reqHost == "" {
@@ -673,7 +681,7 @@ func (c *Config) FindTargetForPath(path string, method string, host ...string) (
 		// Ищем самый длинный совпадающий префикс
 		if strings.HasPrefix(path, rule.PathPrefix) {
 			if len(rule.PathPrefix) > bestMatchLen {
-				bestMatch = &rule
+				bestMatch = rule
 				bestMatchLen = len(rule.PathPrefix)
 			}
 		}

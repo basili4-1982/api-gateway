@@ -252,12 +252,24 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 			return
 		}
 
-		// Health
-		mp.mu.RLock()
-		targetProxy, exists := mp.targets[target.Name]
-		mp.mu.RUnlock()
+		// Health + взвешенный выбор таргета из пула роута. Правила,
+		// совпадающие по (host, path_prefix, methods), делят один пул,
+		// поэтому несколько статических таргетов балансируются.
+		cbEnabled := mp.config.Load().CircuitBreaker
+		rc := mp.findRouteConfig(rule)
+		var targetProxy *TargetProxy
+		if rc != nil {
+			targetProxy = rc.pickTarget(cbEnabled)
+		} else {
+			mp.mu.RLock()
+			targetProxy = mp.targets[target.Name]
+			mp.mu.RUnlock()
+			if targetProxy != nil && !targetProxy.isHealthy(cbEnabled) {
+				targetProxy = nil
+			}
+		}
 
-		if !exists || !targetProxy.isHealthy(mp.config.Load().App.CircuitBreaker) {
+		if targetProxy == nil {
 			mp.setCORSHeaders(rw.Header(), r)
 			http.Error(rw, "Target unavailable", http.StatusServiceUnavailable)
 			mp.metrics.IncRequests(r.Method, r.URL.Path, "503")
@@ -265,8 +277,10 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 			return
 		}
 
+		// Держим выбранный таргет в синхроне для modifyRequest/logAccess.
+		target = targetProxy.config
+
 		// Per-route rate limit
-		rc := mp.findRouteConfig(rule)
 		if rc != nil && rc.RateLimit != nil {
 			clientIP := getClientIP(r)
 			if !rc.RateLimit.Allow(clientIP) {
