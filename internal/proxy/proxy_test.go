@@ -2,9 +2,11 @@ package proxy
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -377,5 +379,71 @@ func TestCreateTargetProxy_UsesConfiguredConnPool(t *testing.T) {
 	}
 	if tp.transport.MaxIdleConns != 500 {
 		t.Errorf("MaxIdleConns = %d, want 500 (250 * 2 targets)", tp.transport.MaxIdleConns)
+	}
+}
+
+func newBodyLimitProxy(t *testing.T, limit *int64) (*MultiProxy, *TargetProxy, chan int) {
+	t.Helper()
+	received := make(chan int, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		received <- len(b)
+	}))
+	t.Cleanup(srv.Close)
+
+	mp := &MultiProxy{logger: zap.NewNop()}
+	mp.config.Store(&config.Config{
+		Server: config.ServerConfig{MaxRequestBodySize: limit},
+	})
+	tp, err := mp.createTargetProxy(&config.TargetConfig{Name: "t", URL: srv.URL}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mp, tp, received
+}
+
+func TestProxyRequest_AppliesMaxRequestBodySize(t *testing.T) {
+	limit := int64(5)
+	mp, tp, received := newBodyLimitProxy(t, &limit)
+
+	req := httptest.NewRequest("POST", "/", io.NopCloser(strings.NewReader("0123456789")))
+	mp.proxyRequest(httptest.NewRecorder(), req, tp, "/")
+
+	if n := <-received; n != 5 {
+		t.Fatalf("upstream read %d bytes, want 5", n)
+	}
+}
+
+func TestProxyRequest_ZeroMaxRequestBodySizeIsUnlimited(t *testing.T) {
+	limit := int64(0)
+	mp, tp, received := newBodyLimitProxy(t, &limit)
+
+	req := httptest.NewRequest("POST", "/", io.NopCloser(strings.NewReader("0123456789")))
+	mp.proxyRequest(httptest.NewRecorder(), req, tp, "/")
+
+	if n := <-received; n != 10 {
+		t.Fatalf("upstream read %d bytes, want 10 (0 = unlimited)", n)
+	}
+}
+
+func TestReadBodyLimited(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		limit int64
+		want  string
+	}{
+		{"zero is unlimited", 0, "0123456789"},
+		{"negative is unlimited", -1, "0123456789"},
+		{"positive caps read", 4, "0123"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := readBodyLimited(strings.NewReader("0123456789"), tc.limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(b) != tc.want {
+				t.Errorf("readBodyLimited(limit=%d) = %q, want %q", tc.limit, b, tc.want)
+			}
+		})
 	}
 }

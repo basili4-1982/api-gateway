@@ -384,3 +384,58 @@ targets:
 		t.Errorf("max_idle_conns_per_host = %d, want 250", cfg.MaxIdleConnsPerHost)
 	}
 }
+
+func TestConfig_MaxRequestBodySizeDefault(t *testing.T) {
+	yaml := `
+targets:
+  - name: "api"
+    url: "http://api:9001"
+`
+	path := writeTempConfig(t, yaml)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Server.EffectiveMaxRequestBodySize(); got != 10<<20 {
+		t.Errorf("omitted max_request_body_size effective = %d, want %d", got, 10<<20)
+	}
+	if cfg.Server.MaxRequestBodySize == nil {
+		t.Fatal("omitted max_request_body_size must materialize the 10 MiB default")
+	}
+}
+
+func TestConfig_MaxRequestBodySizeZeroIsUnlimited(t *testing.T) {
+	yaml := `
+server:
+  max_request_body_size: 0
+targets:
+  - name: "api"
+    url: "http://api:9001"
+`
+	path := writeTempConfig(t, yaml)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Server.EffectiveMaxRequestBodySize(); got != 0 {
+		t.Errorf("explicit max_request_body_size: 0 must mean unlimited, got effective %d", got)
+	}
+}
+
+func TestConfig_MaxRequestBodySizeExplicitLimit(t *testing.T) {
+	yaml := `
+server:
+  max_request_body_size: 1048576
+targets:
+  - name: "api"
+    url: "http://api:9001"
+`
+	path := writeTempConfig(t, yaml)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Server.EffectiveMaxRequestBodySize(); got != 1048576 {
+		t.Errorf("explicit max_request_body_size effective = %d, want 1048576", got)
+	}
+}

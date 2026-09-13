@@ -576,7 +576,7 @@ func (mp *MultiProxy) proxyRequest(w http.ResponseWriter, r *http.Request, targe
 	}
 
 	if r.Body != nil {
-		if maxSize := mp.config.Load().Server.MaxRequestBodySize; maxSize > 0 {
+		if maxSize := mp.config.Load().Server.EffectiveMaxRequestBodySize(); maxSize > 0 {
 			r.Body = io.NopCloser(io.LimitReader(r.Body, maxSize))
 		}
 	}
