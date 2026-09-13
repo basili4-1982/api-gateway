@@ -1,0 +1,354 @@
+<!-- generated — do not edit here; source: frontend/app/docs/api-gateway/configuration/content.md -->
+
+# Конфигурация
+
+Полный справочник по всем секциям и полям, которые читает код `api-gateway`. Для каждого поля указаны тип, значение по умолчанию, допустимые значения и короткий пример. Значения по умолчанию применяются, когда ключ не задан в YAML; явно заданные значения имеют приоритет.
+
+## Общая структура
+
+Конфиг — один YAML-файл. Путь задаётся флагом `-config` (по умолчанию `/etc/proxy/config.yaml`). Секции верхнего уровня:
+
+| Секция | Назначение |
+|---|---|
+| `application` | Режим работы, метрики, пул соединений |
+| `server` | HTTP-сервер: порт, таймауты, лимит тела |
+| `tls` | HTTPS и автоматические сертификаты |
+| `static` | Раздача статики и SPA |
+| `targets` | Бэкенды |
+| `jwt` | Проверка JWT |
+| `basic_auth` | Basic Auth на служебные пути |
+| `logging` | Уровень, формат, access log |
+| `headers` | CORS, проброс claims, подпись, заголовки |
+| `routing` | Правила маршрутизации и глобальный лимит |
+| `permissions` | Интеграция с permission-сервисом |
+| `webhooks` | Публикация событий (webhook/NATS) |
+| `discovery` | Обнаружение сервисов по labels |
+
+Длительности записываются строками Go duration: `500ms`, `5s`, `5m`, `1h`.
+
+## Переменные, флаги и сигналы
+
+**Подстановка `${VAR}`.** Перед разбором YAML шлюз раскрывает `${VAR}` и `$VAR` из окружения. Если переменная не задана или пуста, литерал `${VAR}` остаётся в тексте как есть — конфиг не «молча» подставит пустоту.
+
+```yaml
+jwt:
+  secret_key: "${JWT_SECRET}"
+permissions:
+  service_url: "${PERMISSIONS_URL}"
+```
+
+**Переменные окружения.** Их читает не конфиг, а сам процесс:
+
+| Переменная | Значение | Смысл |
+|---|---|---|
+| `PPROF_ADDR` | адрес, напр. `127.0.0.1:6060` | Включает pprof-сервер; пусто — выключен |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | URL, напр. `http://localhost:4318` | Включает OTLP-трейсинг; пусто — выключен |
+| `OTEL_EXPORTER_OTLP_INSECURE` | `true` | Отправлять OTLP без TLS |
+| `OTEL_INSECURE` | `true` | То же, альтернативное имя |
+
+**Флаги.** `-config <path>` — путь к файлу конфигурации.
+
+**Сигналы.** `SIGHUP` перечитывает конфиг и применяет его атомарно (старое состояние сохраняется при ошибке). `SIGINT` и `SIGTERM` запускают graceful shutdown с таймаутом 30 секунд.
+
+**Неизвестные ключи.** Ключи, которых нет в структуре конфига, не считаются ошибкой: шлюз пишет в лог предупреждение `Unknown config key` с точечным путём (например `headers.forward_headers`). Строгий режим намеренно не включён.
+
+## application
+
+Общие настройки процесса.
+
+| Поле | Тип | По умолчанию | Смысл и значения | Пример |
+|---|---|---|---|---|
+| `env` | string | `""` | `dev` включает мягкий CORS (reflect origin + credentials) и dev-логи. Любое другое значение — обычный режим | `prod` |
+| `health_check` | bool | `false` | Включает фоновые health-проверки таргетов, у которых задан `health_check` | `true` |
+| `circuit_breaker` | bool | `false` | Включает circuit breaker на ошибках транспорта | `true` |
+| `metrics_enabled` | bool | `false` | Собирает метрики и открывает `/metrics` | `true` |
+| `metrics_allowed_ips` | []string | `[]` (все) | Allowlist клиентских IP для `/metrics` | `["10.0.0.5"]` |
+| `max_idle_conns_per_host` | int | `1000` | Размер пула keep-alive соединений к каждому таргету. Должен быть не меньше пиковой конкурентности | `1000` |
+
+Метрики выключены по умолчанию, потому что их сбор добавляет работу на каждый запрос. Включайте `metrics_enabled` осознанно; `metrics_allowed_ips` ограничивает доступ к `/metrics`, если эндпоинт смотрит наружу.
+
+## server
+
+HTTP-сервер.
+
+| Поле | Тип | По умолчанию | Смысл и значения | Пример |
+|---|---|---|---|---|
+| `port` | int | `8080` | Порт HTTP-сервера (в TLS-режиме не используется) | `8080` |
+| `read_timeout` | duration | `5s` | Таймаут чтения запроса | `5s` |
+| `write_timeout` | duration | `10s` | Таймаут записи ответа | `30s` |
+| `idle_timeout` | duration | `120s` | Таймаут keep-alive соединения | `120s` |
+| `max_request_body_size` | int64 (байты) | `10485760` (10 MiB), если ключ не задан | Лимит тела запроса. `0` — **без лимита**, `>0` — лимит в байтах | `1048576` |
+
+**Семантика `max_request_body_size`.** Различаются «ключ не задан» и «явный ноль»: не задан — 10 MiB, `0` — без ограничения, положительное число — точный лимит. Тот же лимит применяется к чтению тела для аудита, чтобы вебхуки не вычитывали тело неограниченно.
+
+## tls
+
+HTTPS с автоматическими сертификатами Let's Encrypt (ACME).
+
+| Поле | Тип | По умолчанию | Смысл и значения | Пример |
+|---|---|---|---|---|
+| `enabled` | bool | `false` | Включает HTTPS-сервер | `true` |
+| `port` | int | `443` | HTTPS-порт | `443` |
+| `http_port` | int | `80` | HTTP-порт для ACME-challenge и редиректа | `80` |
+| `domains` | []string | — | Домены сертификата; обязательны при `enabled: true`. Поддерживаются wildcard | `["api.example.com"]` |
+| `email` | string | — | Email для регистрации в Let's Encrypt; обязателен | `admin@example.com` |
+| `cache_dir` | string | `/var/lib/api-gateway/certs` | Каталог кеша сертификатов; при `staging` используется подкаталог `staging` | `/var/lib/api-gateway/certs` |
+| `staging` | bool | `false` | `true` — ACME staging CA (для отладки), `false` — production Let's Encrypt | `false` |
+| `directory_url` | string | `""` | Свой ACME directory URL; если задан, перекрывает выбор CA по `staging` | `https://acme-staging-v02.api.letsencrypt.org/directory` |
+| `redirect_http` | bool | `false` | Редиректит HTTP на HTTPS; `/health` и `/ready` на HTTP-порту отвечают 200 | `true` |
+
+При включённом TLS запускаются два сервера: HTTPS на `port` и HTTP на `http_port` для ACME-challenge и редиректа. `staging: true` использует реальный staging CA и отдельный подкаталог кеша, чтобы staging-сертификаты не смешивались с production.
+
+## static
+
+Раздача статики и SPA-приложений. Обрабатывается до проксирования, но после глобального лимита.
+
+| Поле | Тип | По умолчанию | Смысл и значения | Пример |
+|---|---|---|---|---|
+| `apps` | []object | `[]` | Список SPA/статических приложений | см. ниже |
+| `skip_prefixes` | []string | `[]` | Пути, которые не отдаются статикой (уходят в прокси) | `["/api"]` |
+
+Поля элемента `apps`:
+
+| Поле | Тип | По умолчанию | Смысл и значения | Пример |
+|---|---|---|---|---|
+| `path_prefix` | string | — | URL-префикс приложения | `/` |
+| `root_dir` | string | — | Каталог со статикой | `/app/static` |
+| `index_file` | string | `index.html` | Fallback-файл SPA | `index.html` |
+| `max_age` | int (сек) | `3600` | Значение `Cache-Control: max-age` | `3600` |
+
+```yaml
+static:
+  skip_prefixes: ["/api"]
+  apps:
+    - path_prefix: "/"
+      root_dir: "/app/static"
+      index_file: "index.html"
+      max_age: 3600
+```
+
+Если маршрут совпадает с правилом, у которого задан `Host`, статика пропускается — так host-based роутинг работает при смонтированной статике. Для несуществующих путей отдаётся `index_file` (SPA fallback); поддерживаются и плоские `.html`-файлы (`about.html` для `/about`).
+
+## targets
+
+Список бэкендов. Имя и URL обязательны; имена уникальны.
+
+| Поле | Тип | По умолчанию | Смысл и значения | Пример |
+|---|---|---|---|---|
+| `name` | string | — | Уникальное имя таргета | `api` |
+| `url` | string | — | Базовый URL бэкенда | `http://127.0.0.1:9001` |
+| `timeout` | duration | `30s` | Таймаут запроса к таргету | `10s` |
+| `path_prefix` | string | `""` | Префикс; при пустых `routing.rules` из него создаётся правило | `/api` |
+| `strip_prefix` | bool | `false` | Удалять префикс при проксировании | `false` |
+| `weight` | int | `1`, если ключ не задан | Вес в пуле маршрута: `nil` — 1, `0` и отрицательные исключают таргет, `>0` — вес | `2` |
+| `health_check` | string | `""` | URL health-проверки; работает при `application.health_check: true` | `http://127.0.0.1:9001/health` |
+
+**Семантика `weight`.** Таргеты, чьи правила совпадают по `(host, path_prefix, methods)`, образуют один пул и распределяются взвешенным round-robin по здоровым кандидатам. Отсутствие ключа `weight` — это вес 1, а явный `weight: 0` (или отрицательный) **исключает** таргет из выбора. Различайте эти два случая.
+
+## jwt
+
+Проверка JWT. Токен берётся из `Authorization: Bearer …` или из cookie `cml_access`.
+
+| Поле | Тип | По умолчанию | Смысл и значения | Пример |
+|---|---|---|---|---|
+| `secret_key` | string | `""` | Симметричный ключ для HMAC | `"${JWT_SECRET}"` |
+| `public_key_file` | string | `""` | PEM-файл публичного ключа для RSA/ECDSA/Ed25519 | `/etc/proxy/public.pem` |
+| `algorithm` | string | `HS256` | `HS256/384/512`, `RS256/384/512`, `ES256/384/512`, `EdDSA`/`ED25519` | `RS256` |
+| `validate_exp` | bool | `false` | Проверять срок действия; принудительно `true`, если `required: true` | `true` |
+| `validate_iss` | bool | `false` | Проверять issuer | `false` |
+| `expected_iss` | string | `""` | Ожидаемый issuer | `"https://auth.example"` |
+| `validate_aud` | bool | `false` | Проверять audience | `false` |
+| `expected_aud` | string | `""` | Ожидаемый audience | `"api"` |
+| `claim_mappings` | []string | `["sub"]` | Claims, извлекаемые в контекст; при пустом значении дополнительно маппится `sub → X-User-ID` | `["id", "email", "roles"]` |
+| `required` | bool | `false` | Требовать токен глобально | `false` |
+
+Глобальный `required` перекрывается настройкой маршрута `auth.required`. Предъявленный токен всегда проверяется криптографически: на маршруте без требования невалидный токен игнорируется (запрос идёт как анонимный), на требующем — возвращается 401.
+
+## basic_auth
+
+Basic Auth для служебных путей. Проверка — constant-time по SHA-256 от логина и пароля.
+
+| Поле | Тип | По умолчанию | Смысл и значения | Пример |
+|---|---|---|---|---|
+| `enabled` | bool | `false` | Включает Basic Auth | `true` |
+| `username` | string | `""` | Логин | `internal` |
+| `password` | string | `""` | Пароль | `"${BASIC_PASS}"` |
+| `skip_paths` | []string | `[]` | Пути без Basic Auth; совпадение точное или по префиксу `путь/` | `["/health"]` |
+
+Basic Auth стоит во внешнем слое цепочки и защищает всё, включая `/metrics` и статику, кроме `skip_paths`. При успехе заголовок `Authorization` удаляется перед проксированием.
+
+## logging
+
+| Поле | Тип | По умолчанию | Смысл и значения | Пример |
+|---|---|---|---|---|
+| `level` | string | `info` | `debug`, `info`, `warn`, `error`, `panic`, `fatal` | `debug` |
+| `format` | string | `text` | `console`, `text` (алиас `console`), `json`; регистр не важен. Иное значение — ошибка запуска | `json` |
+| `access_log` | bool | `false` | Построчный лог каждого запроса; выключен по умолчанию из-за аллокаций | `true` |
+
+Неверный `format` не «молча» превращается в консоль: загрузка конфига завершается ошибкой `logging.format must be one of console, text, json`.
+
+## headers
+
+| Поле | Тип | По умолчанию | Смысл и значения | Пример |
+|---|---|---|---|---|
+| `strip_authorization` | bool | `false` | Удалять `Authorization` перед проксированием | `true` |
+| `claim_to_header` | map[string]string | `{}` | Claim → имя заголовка; при пустых `claim_mappings` по умолчанию `sub → X-User-ID` | `{id: X-User-ID}` |
+| `add_headers` | map[string]string | `{}` | Заголовки, добавляемые в каждый проксируемый запрос | `{X-Gateway: sarnas}` |
+| `sign_header` | string | `""` | Имя заголовка для HMAC-SHA256(id, `permissions.api_key`) в hex | `X-User-Signature` |
+| `cors` | object | нет | Настройки CORS (см. ниже) | см. ниже |
+
+Поля `cors`:
+
+| Поле | Тип | По умолчанию | Смысл и значения | Пример |
+|---|---|---|---|---|
+| `enabled` | bool | `false` | Включает CORS | `true` |
+| `allowed_origins` | []string | `[]` | `*` или точные origin; при `*` credentials не выставляются | `["https://app.example"]` |
+| `allowed_methods` | []string | встроенный список | Разрешённые методы | `["GET", "POST"]` |
+| `allowed_headers` | []string | встроенный список | Разрешённые заголовки | `["Authorization"]` |
+| `expose_headers` | []string | встроенный список | Заголовки, видимые браузеру | `["X-Request-ID"]` |
+| `max_age` | int (сек) | `86400` | Время кеширования preflight | `86400` |
+
+```yaml
+headers:
+  strip_authorization: true
+  claim_to_header:
+    id: "X-User-ID"
+    roles: "X-User-Roles"
+  add_headers:
+    X-Gateway-Version: "1.0.0"
+  sign_header: "X-User-Signature"
+  cors:
+    enabled: true
+    allowed_origins: ["https://app.example"]
+    max_age: 86400
+```
+
+Правила CORS: при точном совпадении origin он отражается и выставляется `Access-Control-Allow-Credentials`; при `*` возвращается `*` без credentials; не попавший в allowlist origin CORS-заголовков не получает. Любой `OPTIONS` обрабатывается как preflight и возвращает 200. В `env: "dev"` при отсутствии секции `cors` включается мягкий режим с отражением origin.
+
+`sign_header` вычисляется только если заданы и `sign_header`, и `permissions.api_key`, и в токене есть claim `id`.
+
+## routing
+
+| Поле | Тип | По умолчанию | Смысл и значения | Пример |
+|---|---|---|---|---|
+| `rules` | []object | `[]` | Правила маршрутизации; при пустом списке генерируются из `targets` с `path_prefix` | см. ниже |
+| `global_limit` | object | нет | Глобальный лимит на весь процесс | см. ниже |
+
+Поля правила `rules[]`:
+
+| Поле | Тип | По умолчанию | Смысл и значения | Пример |
+|---|---|---|---|---|
+| `host` | string | `""` | Матч по `Host`; поддерживается wildcard `*.example.com` | `api.example.com` |
+| `path_prefix` | string | — | Префикс пути; обязателен | `/api` |
+| `target_name` | string | — | Имя таргета; обязателен и должен существовать | `api` |
+| `methods` | []string | все | Фильтр HTTP-методов (регистр не важен) | `["GET", "POST"]` |
+| `strip_path` | bool | `false` | Удалять префикс при проксировании | `true` |
+| `auth` | object | нет | Аутентификация маршрута | см. ниже |
+| `rate_limit` | object | нет | Лимит маршрута | см. ниже |
+
+`auth`: `required` (bool, по умолчанию наследует глобальный `jwt.required`), `roles` ([]string, должны присутствовать все), `strip_token` (bool, наследует `headers.strip_authorization`).
+
+`rate_limit`: `requests_per_second` (float, token bucket), `burst` (int). `global_limit` имеет те же поля, но применяется ко всем запросам процесса, а не на IP.
+
+```yaml
+routing:
+  global_limit:
+    requests_per_second: 1000
+    burst: 2000
+  rules:
+    - path_prefix: "/api"
+      target_name: "api"
+      strip_path: true
+      auth:
+        required: true
+        roles: ["user"]
+      rate_limit:
+        requests_per_second: 50
+        burst: 100
+```
+
+Выбирается правило с самым длинным совпадающим `path_prefix` среди тех, у кого совпали `host` и `methods`. Если ничего не совпало — 404. Правила, совпадающие по `(host, path_prefix, methods)`, делят один пул балансировки и **обязаны** совпадать по `auth`, `strip_path` и `rate_limit`, иначе запуск завершается ошибкой.
+
+## permissions
+
+Интеграция с внешним permission-сервисом. Требует JWT с claim `id`, приводимым к целому.
+
+| Поле | Тип | По умолчанию | Смысл и значения | Пример |
+|---|---|---|---|---|
+| `enabled` | bool | `false` | Включает модуль | `true` |
+| `service_url` | string | — | Базовый URL permission-сервиса; обязателен при `enabled` | `http://permissions:8080` |
+| `cache_ttl` | duration | `300s` | TTL кеша разрешений по пользователю | `300s` |
+| `header_name` | string | `X-User-Permissions` | Заголовок с разрешениями (через запятую) | `X-User-Permissions` |
+| `invalidate_token` | string | значение `api_key` | Токен для инвалидации кеша; если пуст — равен `api_key` | `"${INVALIDATE_TOKEN}"` |
+| `api_key` | string | `""` | API-ключ сервиса; также секрет для `headers.sign_header` | `"${PERMISSIONS_KEY}"` |
+
+Заголовок выставляется, только если у пользователя есть непустой список разрешений. Инвалидация: `POST /_cache/permissions/invalidate` с заголовком `X-Invalidate-Token`; параметр `user_id` инвалидирует одного пользователя, без него — весь кеш.
+
+## webhooks
+
+Публикация событий на каждый запрос или ответ. Транспорты — HTTP webhook и NATS.
+
+| Поле | Тип | По умолчанию | Смысл и значения | Пример |
+|---|---|---|---|---|
+| `name` | string | — | Уникальное имя вебхука | `audit` |
+| `transport` | string | — | `webhook` или `nats` | `webhook` |
+| `webhook_url` | string | `""` | URL приёмника; обязателен для `webhook` | `https://audit.example/events` |
+| `nats_url` | string | `""` | URL NATS; обязателен для `nats` | `nats://nats:4222` |
+| `subject` | string | `""` | NATS subject; обязателен для `nats` | `audit.events` |
+| `trigger` | string | — | `on_request` или `on_response` | `on_response` |
+| `methods` | []string | все | Фильтр методов (регистр не важен) | `["POST", "PUT", "PATCH", "DELETE"]` |
+| `on_status_codes` | []int | все | Для `on_response`: публиковать только эти коды | `[200, 201]` |
+| `exclude_paths` | []string | `[]` | Префиксы путей, исключённые из публикации | `["/health"]` |
+| `async` | bool | `false` | Отправлять в горутине, не блокируя запрос | `true` |
+| `include_request_body` | bool | `true`, если ключ не задан | Публиковать тело запроса как `changes` (только JSON) | `false` |
+| `include_response_body` | bool | `false` | Публиковать тело ответа как `response_body` (только JSON, до 64 KiB) | `true` |
+| `batch_size` | int | `0`/`1` | `>1` включает батчинг HTTP-вебхука | `1000` |
+| `flush_interval` | duration | `200ms` | Максимальная задержка перед отправкой неполной пачки | `100ms` |
+
+Событие содержит `method`, `path`, `query`, `user_id`, `user_email`, `user_roles`, `request_id`, `status_code`, `timestamp`, `changes` и `response_body`. Батчинг (`batch_size > 1`) шлёт один POST с телом `{"count":N,"events":[...]}`. Очередь батчера ограничена (8192 события); при переполнении постановка блокируется — события не теряются, но запросы замедляются (backpressure). Соединение NATS устанавливается по `nats_url` **первого** вебхука, поэтому у всех NATS-вебхуков URL должен совпадать.
+
+## discovery
+
+Обнаружение бэкендов по labels контейнеров Docker/Podman. Обнаруженные таргеты и правила **дополняют** статические; при конфликте имени таргета побеждает статика. Если обнаруженный сервис описывает тот же маршрут `(host, path_prefix, methods)`, он попадает в общий пул с статикой.
+
+| Поле | Тип | По умолчанию | Смысл и значения | Пример |
+|---|---|---|---|---|
+| `enabled` | bool | `false` | Включает discovery | `true` |
+| `provider` | string | `docker` | `docker` или `podman` (один клиент) | `docker` |
+| `host` | string | `unix:///var/run/docker.sock` | Socket Docker/Podman API | `unix:///var/run/docker.sock` |
+| `api_version` | string | `v1.41` | Версия API; `""` — запросы без версии | `v1.41` |
+| `label_prefix` | string | `gateway` | Префикс labels | `gateway` |
+| `service_name_labels` | []string | compose-сервис Docker и Podman | Цепочка фолбэков имени таргета | `["com.docker.compose.service"]` |
+| `network` | string | `""` | Учитывать только контейнеры этой сети; пусто — все | `proxy` |
+| `debounce` | duration | `500ms` | Задержка перед ре-синком по событиям | `500ms` |
+| `resync_interval` | duration | `5m` | Период полного ре-синка | `5m` |
+| `default_timeout` | duration | `30s` | Таймаут обнаруженного таргета по умолчанию | `30s` |
+| `state_file` | string | `/var/lib/api-gateway/discovery-state.json` | Файл последнего удачного результата (аварийный фолбэк); `""` отключает персист | `/var/lib/api-gateway/discovery-state.json` |
+
+Если `discovery.enabled: true`, статические `targets` и `routing.rules` можно не заполнять. При включённом discovery достаточно даже пустой секции `discovery: { enabled: true }` — остальные поля подставятся.
+
+**Аварийный фолбэк.** Последний удачный результат discovery атомарно пишется в `state_file` и применяется при старте, поэтому маршруты переживают рестарт при недоступном Docker/Podman. Каталог `state_file` должен быть writable (смонтируйте volume). Ограничение: первый холодный старт без файла состояния и с недоступным Docker останется без обнаруженных маршрутов.
+
+### Labels
+
+Маркер контейнера — `gateway.enable: "true"` (принимаются `true`/`1`/`yes`, регистр не важен).
+
+| Label | Обязателен | Смысл | По умолчанию |
+|---|---|---|---|
+| `gateway.enable` | да | Опт-ин контейнера | — |
+| `gateway.name` | нет | Имя таргета | `service_name_labels`, иначе имя контейнера |
+| `gateway.port` | да | Порт | единственный exposed TCP-порт |
+| `gateway.scheme` | нет | `http` или `https` | `http` |
+| `gateway.timeout` | нет | Таймаут запроса к цели | `discovery.default_timeout` |
+| `gateway.health` | нет | Health-путь или полный URL | — |
+| `gateway.weight` | нет | Вес таргета (`0`/отрицательный исключает) | `1` |
+
+Роутеры задаются коротко (`gateway.<field>` → роутер `default`) или именованно (`gateway.router.<id>.<field>`): `host`, `path_prefix`, `methods`, `strip_path`, `auth.required`, `auth.roles`, `auth.strip_token`, `rate_limit.rps`, `rate_limit.burst`. Роутер без `host` и `path_prefix` пропускается.
+
+## Поведение и оговорки
+
+- **Порядок middleware.** Снаружи внутрь: инвалидация кеша permissions, Basic Auth, recovery, request id, tracing, метрики активных запросов, `/metrics`, глобальный лимит, статика, CORS-preflight, проксирование. Поэтому Basic Auth защищает и `/metrics`, и статику.
+- **Рейт-лимиты.** Per-route лимит — token bucket на IP клиента; IP берётся из последнего непустого значения `X-Forwarded-For`, иначе из `RemoteAddr`. Глобальный лимит — один на процесс. Per-route отдаёт 429 без `Retry-After`; глобальный — 429 с `Retry-After: 1`. Лимитеры по IP очищаются после часа простоя.
+- **Access log.** Выключен по умолчанию: каждая запись — это аллокации на горячем пути. Включайте для отладки, а не в проде под нагрузкой.
+- **Тело запроса для аудита.** Читается только для `POST`, `PUT`, `PATCH`, `QUERY` и ограничено `max_request_body_size`; в событие попадает только JSON-объект короче 64 KiB.
+- **Метрики.** `/metrics` в формате `expvar`; при `metrics_allowed_ips` доступ ограничен по IP.
