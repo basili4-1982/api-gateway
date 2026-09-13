@@ -42,7 +42,7 @@ type RouteConfig struct {
 }
 
 // pickTarget выбирает следующий таргет пула взвешенным round-robin.
-// Нездоровые кандидаты (isHealthy) и кандидаты с весом <= 0 пропускаются.
+// Нездоровые кандидаты и кандидаты с весом <= 0 пропускаются.
 // Если здоровых кандидатов с положительным весом нет — возвращает nil,
 // и вызывающая сторона отдаёт 503.
 func (rc *RouteConfig) pickTarget(cbEnabled bool) *TargetProxy {
@@ -54,42 +54,51 @@ func (rc *RouteConfig) pickTarget(cbEnabled bool) *TargetProxy {
 	// без инкремента счётчика.
 	if len(rc.Targets) == 1 {
 		tp := rc.Targets[0]
-		if rc.weights[0] <= 0 || !tp.isHealthy(cbEnabled) {
+		if rc.weights[0] <= 0 || !tp.acquire(cbEnabled) {
 			return nil
 		}
 		return tp
 	}
 
-	// isHealthy имеет побочные эффекты (переходы half-open), поэтому
-	// вызываем его ровно один раз на кандидата за запрос и запоминаем
-	// здоровых, чтобы не звать повторно при подсчёте позиции.
 	type candidate struct {
 		target *TargetProxy
 		weight int
 	}
-	healthy := make([]candidate, 0, len(rc.Targets))
-	sum := 0
-	for i, tp := range rc.Targets {
-		w := rc.weights[i]
-		if w <= 0 || !tp.isHealthy(cbEnabled) {
-			continue
+	// Half-open пробник расходуется только выбранным таргетом: кандидаты
+	// проверяются read-only (eligible), а acquire вызывается на победителе.
+	// Иначе проигравший кандидат «сжёг» бы пробник и остался навсегда
+	// исключённым, пока его не переведёт другой путь.
+	for attempt := 0; attempt <= len(rc.Targets); attempt++ {
+		healthy := make([]candidate, 0, len(rc.Targets))
+		sum := 0
+		for i, tp := range rc.Targets {
+			w := rc.weights[i]
+			if w <= 0 || !tp.eligible(cbEnabled) {
+				continue
+			}
+			healthy = append(healthy, candidate{target: tp, weight: w})
+			sum += w
 		}
-		healthy = append(healthy, candidate{target: tp, weight: w})
-		sum += w
-	}
-	if sum <= 0 {
-		return nil
-	}
+		if sum <= 0 {
+			return nil
+		}
 
-	n := rc.counter.Add(1) - 1
-	pos := int(n % uint64(sum))
-	for _, c := range healthy {
-		if pos < c.weight {
-			return c.target
+		n := rc.counter.Add(1) - 1
+		pos := int(n % uint64(sum))
+		chosen := healthy[len(healthy)-1].target
+		for _, c := range healthy {
+			if pos < c.weight {
+				chosen = c.target
+				break
+			}
+			pos -= c.weight
 		}
-		pos -= c.weight
+		if chosen.acquire(cbEnabled) {
+			return chosen
+		}
+		// Пробник забрал параллельный запрос — пересчитываем кандидатов.
 	}
-	return healthy[len(healthy)-1].target
+	return nil
 }
 
 var corsHeaders = map[string]string{
@@ -692,11 +701,16 @@ func (mp *MultiProxy) logAccess(reqID, traceID string, r *http.Request, statusCo
 	)
 }
 
-// isHealthy возвращает статус здоровья таргета (учитывая circuit breaker)
-func (tp *TargetProxy) isHealthy(cbEnabled bool) bool {
-	tp.mu.RLock()
-	defer tp.mu.RUnlock()
+// eligible сообщает, можно ли выбрать таргет, НЕ расходуя half-open пробник.
+// Истёкшая открытая цепь лениво переводится в half-open со взведённым
+// пробником, чтобы последующий acquire мог его забрать.
+func (tp *TargetProxy) eligible(cbEnabled bool) bool {
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+	return tp.eligibleLocked(cbEnabled)
+}
 
+func (tp *TargetProxy) eligibleLocked(cbEnabled bool) bool {
 	if !tp.healthy {
 		return false
 	}
@@ -715,6 +729,37 @@ func (tp *TargetProxy) isHealthy(cbEnabled bool) bool {
 			return true
 		}
 		return false
+	case stateHalfOpen:
+		return tp.halfOpenProbe.Load()
+	}
+	return true
+}
+
+// acquire подтверждает выбор таргета и расходует half-open пробник. Возвращает
+// false, если таргет больше не доступен (например, пробник уже забрал
+// параллельный запрос) — тогда вызывающая сторона выбирает заново.
+func (tp *TargetProxy) acquire(cbEnabled bool) bool {
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+
+	if !tp.healthy {
+		return false
+	}
+
+	if !cbEnabled {
+		return true
+	}
+
+	switch tp.cbState {
+	case stateClosed:
+		return true
+	case stateOpen:
+		if time.Since(tp.cbLastFailure) <= tp.cbTimeout {
+			return false
+		}
+		tp.cbState = stateHalfOpen
+		tp.halfOpenProbe.Store(true)
+		return tp.halfOpenProbe.CompareAndSwap(true, false)
 	case stateHalfOpen:
 		return tp.halfOpenProbe.CompareAndSwap(true, false)
 	}

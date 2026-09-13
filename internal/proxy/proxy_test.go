@@ -535,6 +535,34 @@ func TestPickTarget_ZeroWeightNeverSelected(t *testing.T) {
 	}
 }
 
+func TestPickTarget_HalfOpenProbeSurvivesAnotherWinner(t *testing.T) {
+	// b сканируется первым и выигрывает первый раунд; a — half-open с
+	// взведённым пробником. До исправления сканирование a потребляло пробник,
+	// поэтому после победы b таргет a навсегда исключался из выбора.
+	b := poolTarget("b", 1)
+	a := poolTarget("a", 1)
+	a.mu.Lock()
+	a.cbState = stateHalfOpen
+	a.halfOpenProbe.Store(true)
+	a.mu.Unlock()
+	rc := poolOf(b, a)
+
+	sawA := false
+	for i := 0; i < 4; i++ {
+		tp := rc.pickTarget(true)
+		if tp == nil {
+			t.Fatalf("pick %d returned nil", i)
+		}
+		if tp == a {
+			sawA = true
+			break
+		}
+	}
+	if !sawA {
+		t.Fatal("half-open recovered target was stranded after another candidate won selection")
+	}
+}
+
 func TestReload_PicksUpWeightChanges(t *testing.T) {
 	newCfg := func(weightA, weightB int) *config.Config {
 		return &config.Config{
