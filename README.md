@@ -259,6 +259,81 @@ docker run -p 8080:8080 \
   api-gateway
 ```
 
+## Дашборд
+
+Отдельный read-only бинарник `cmd/dashboard` показывает сводку конфигурации,
+последнее сохранённое состояние service discovery и живые метрики гейтвея.
+Гейтвей при этом не изменяется и не требует перезапуска.
+
+```bash
+# Сборка и запуск локально
+make dashboard
+make dashboard-run \
+  CONFIG=config.local.yaml \
+  DASHBOARD_DISCOVERY_STATE=/var/lib/api-gateway/discovery-state.json
+```
+
+Эндпоинты: `GET /` — HTML-обзор, `GET /api/status` — тот же снимок в JSON,
+`GET /healthz` — `200 ok`.
+
+### Флаги
+
+| Флаг | По умолчанию | Назначение |
+|------|--------------|------------|
+| `-config` | `/etc/proxy/config.yaml` | конфиг гейтвея для сводки |
+| `-discovery-state` | пусто | файл `discovery.state_file`; пусто — панель выключена |
+| `-metrics-url` | `http://127.0.0.1:8080/metrics` | `/metrics` гейтвея; пусто — панель выключена |
+| `-listen` | `127.0.0.1:8081` | адрес дашборда |
+| `-refresh` | `5s` | интервал авто-обновления HTML |
+| `-basic-auth` | пусто | `user:password`; защищает все маршруты |
+
+### Источники данных и деградация
+
+Каждый запрос перечитывает источники заново. Если один из них недоступен
+(нет файла, битый JSON, гейтвей не отвечает), страница всё равно отрисовывается
+с баннером ошибки, а остальные панели продолжают работать. Дашборд стартует
+даже при невалидном конфиге гейтвея.
+
+Секреты (`jwt.secret_key`, `basic_auth.password`, `permissions.api_key`,
+`permissions.invalidate_token`) никогда не отображаются; URL с userinfo
+редактируются. Метрики видны, только если у гейтвея включён
+`application.metrics_enabled`.
+
+По умолчанию дашборд слушает loopback. В контейнере задайте `-listen :8081` и
+ограничьте сетевой доступ либо включите `-basic-auth`.
+
+### Docker Compose
+
+```yaml
+services:
+  api-gateway:
+    image: api-gateway
+    volumes:
+      - ./config.yaml:/etc/proxy/config.yaml:ro
+      - gateway-state:/var/lib/api-gateway
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    command:
+      - -config=/etc/proxy/config.yaml
+      - -discovery-state=/var/lib/api-gateway/discovery-state.json
+      - -metrics-url=http://api-gateway:8080/metrics
+      - -listen=:8081
+      - -basic-auth=admin:${DASHBOARD_PASSWORD}
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - ./config.yaml:/etc/proxy/config.yaml:ro
+      - gateway-state:/var/lib/api-gateway:ro
+
+volumes:
+  gateway-state:
+```
+
+Образ собирается отдельно: `docker build -f Dockerfile.dashboard -t api-gateway-dashboard .`
+
 ## Разработка
 
 ```bash

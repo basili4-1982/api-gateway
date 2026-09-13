@@ -1,0 +1,28 @@
+# Read-only gateway dashboard. Built and shipped separately from the gateway.
+# Build:  docker build -f Dockerfile.dashboard -t api-gateway-dashboard .
+FROM golang:1-alpine AS builder
+
+WORKDIR /build
+
+RUN apk add --no-cache git
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -buildvcs=false -ldflags="-w -s" -trimpath -o dashboard ./cmd/dashboard
+
+FROM scratch
+
+# CA-сертификаты — на случай HTTPS до /metrics.
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=builder /build/dashboard /app/dashboard
+
+# Непривилегированный пользователь; конфиг/state монтируются только для чтения.
+USER 65532:65532
+WORKDIR /app
+
+ENTRYPOINT ["/app/dashboard"]
+# По умолчанию бинарник слушает loopback; в контейнере нужен внешний bind.
+CMD ["-listen", ":8081"]
