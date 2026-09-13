@@ -1,0 +1,29 @@
+# api-gateway NATS webhook (scenario: feature-cost/api-gateway/webhook-nats).
+# Events are published asynchronously to the NATS subject "audit.events".
+# Source artifact: gwbench config-webhook-nats.yaml.
+server:
+  port: 8080
+application:
+  env: "prod"
+  max_idle_conns_per_host: 1000
+jwt:
+  required: false
+  secret_key: "benchsecret"
+webhooks:
+  - name: "audit"
+    transport: "nats"
+    nats_url: "nats://nats:4222"
+    subject: "audit.events"
+    trigger: "on_response"
+    async: true
+targets:
+  - name: "backend"
+    url: "http://backend:80"
+    timeout: 30s
+routing:
+  rules:
+    - path_prefix: "/"
+      target_name: "backend"
+logging:
+  level: "error"
+  access_log: false

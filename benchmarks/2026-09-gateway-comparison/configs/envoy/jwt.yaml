@@ -1,0 +1,55 @@
+# Envoy built-in JWT scenario (scenario: auth/envoy/jwt_authn).
+# jwt_authn validates HS256 locally from an inline JWKS; there is no external auth hop.
+# The JWKS key "YmVuY2hzZWNyZXQ" is the base64url of the non-secret, benchmark-only key
+# "benchsecret" and must match the token used by the load client.
+admin:
+  address:
+    socket_address: { address: 0.0.0.0, port_value: 9901 }
+static_resources:
+  listeners:
+  - name: main
+    address:
+      socket_address: { address: 0.0.0.0, port_value: 80 }
+    filter_chains:
+    - filters:
+      - name: envoy.filters.network.http_connection_manager
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          stat_prefix: ingress
+          access_log: []
+          route_config:
+            name: local
+            virtual_hosts:
+            - name: all
+              domains: ["*"]
+              routes:
+              - match: { prefix: "/" }
+                route: { cluster: backend }
+          http_filters:
+          - name: envoy.filters.http.jwt_authn
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
+              providers:
+                bench:
+                  issuer: bench
+                  local_jwks:
+                    inline_string: '{"keys":[{"kty":"oct","kid":"bench","alg":"HS256","k":"YmVuY2hzZWNyZXQ"}]}'
+                  forward: true
+              rules:
+              - match: { prefix: "/" }
+                requires: { provider_name: bench }
+          - name: envoy.filters.http.router
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+  clusters:
+  - name: backend
+    connect_timeout: 1s
+    type: STRICT_DNS
+    lb_policy: ROUND_ROBIN
+    load_assignment:
+      cluster_name: backend
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address: { address: backend, port_value: 80 }
