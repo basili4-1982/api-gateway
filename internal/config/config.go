@@ -178,7 +178,6 @@ type PermissionsConfig struct {
 // HeadersConfig конфигурация заголовков
 type HeadersConfig struct {
 	StripAuthorization bool              `yaml:"strip_authorization"`
-	ForwardHeaders     bool              `yaml:"forward_headers"`
 	ClaimToHeader      map[string]string `yaml:"claim_to_header"`
 	AddHeaders         map[string]string `yaml:"add_headers"`
 	SignHeader         string            `yaml:"sign_header"`
