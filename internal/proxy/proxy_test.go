@@ -2,9 +2,12 @@ package proxy
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -377,5 +380,359 @@ func TestCreateTargetProxy_UsesConfiguredConnPool(t *testing.T) {
 	}
 	if tp.transport.MaxIdleConns != 500 {
 		t.Errorf("MaxIdleConns = %d, want 500 (250 * 2 targets)", tp.transport.MaxIdleConns)
+	}
+}
+
+func newBodyLimitProxy(t *testing.T, limit *int64) (*MultiProxy, *TargetProxy, chan int) {
+	t.Helper()
+	received := make(chan int, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		received <- len(b)
+	}))
+	t.Cleanup(srv.Close)
+
+	mp := &MultiProxy{logger: zap.NewNop()}
+	mp.config.Store(&config.Config{
+		Server: config.ServerConfig{MaxRequestBodySize: limit},
+	})
+	tp, err := mp.createTargetProxy(&config.TargetConfig{Name: "t", URL: srv.URL}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mp, tp, received
+}
+
+func TestProxyRequest_AppliesMaxRequestBodySize(t *testing.T) {
+	limit := int64(5)
+	mp, tp, received := newBodyLimitProxy(t, &limit)
+
+	req := httptest.NewRequest("POST", "/", io.NopCloser(strings.NewReader("0123456789")))
+	mp.proxyRequest(httptest.NewRecorder(), req, tp, "/")
+
+	if n := <-received; n != 5 {
+		t.Fatalf("upstream read %d bytes, want 5", n)
+	}
+}
+
+func TestProxyRequest_ZeroMaxRequestBodySizeIsUnlimited(t *testing.T) {
+	limit := int64(0)
+	mp, tp, received := newBodyLimitProxy(t, &limit)
+
+	req := httptest.NewRequest("POST", "/", io.NopCloser(strings.NewReader("0123456789")))
+	mp.proxyRequest(httptest.NewRecorder(), req, tp, "/")
+
+	if n := <-received; n != 10 {
+		t.Fatalf("upstream read %d bytes, want 10 (0 = unlimited)", n)
+	}
+}
+
+func TestReadBodyLimited(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		limit int64
+		want  string
+	}{
+		{"zero is unlimited", 0, "0123456789"},
+		{"negative is unlimited", -1, "0123456789"},
+		{"positive caps read", 4, "0123"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := readBodyLimited(strings.NewReader("0123456789"), tc.limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(b) != tc.want {
+				t.Errorf("readBodyLimited(limit=%d) = %q, want %q", tc.limit, b, tc.want)
+			}
+		})
+	}
+}
+
+// ──────── Weighted balancing ────────
+
+func intPtr(v int) *int { return &v }
+
+func poolTarget(name string, weight int) *TargetProxy {
+	return &TargetProxy{
+		config:           &config.TargetConfig{Name: name, Weight: intPtr(weight)},
+		healthy:          true,
+		cbState:          stateClosed,
+		failureThreshold: defaultFailureThreshold,
+		cbTimeout:        defaultCBTimeout,
+	}
+}
+
+// poolTargetDefaultWeight строит таргет без явного weight — nil, т.е. дефолт.
+func poolTargetDefaultWeight(name string) *TargetProxy {
+	return &TargetProxy{
+		config:           &config.TargetConfig{Name: name},
+		healthy:          true,
+		cbState:          stateClosed,
+		failureThreshold: defaultFailureThreshold,
+		cbTimeout:        defaultCBTimeout,
+	}
+}
+
+func poolOf(targets ...*TargetProxy) *RouteConfig {
+	rc := &RouteConfig{}
+	for _, tp := range targets {
+		weight := tp.config.EffectiveWeight()
+		if weight < 0 {
+			weight = 0
+		}
+		rc.Targets = append(rc.Targets, tp)
+		rc.weights = append(rc.weights, weight)
+		rc.totalWeight += weight
+	}
+	return rc
+}
+
+func TestPickTarget_WeightedDistribution(t *testing.T) {
+	rc := poolOf(poolTarget("a", 3), poolTarget("b", 1))
+
+	counts := map[string]int{}
+	const n = 400
+	for i := 0; i < n; i++ {
+		tp := rc.pickTarget(false)
+		if tp == nil {
+			t.Fatal("pickTarget returned nil with healthy targets")
+		}
+		counts[tp.config.Name]++
+	}
+	if counts["a"] < 280 || counts["a"] > 320 {
+		t.Fatalf("weight-3 target selected %d/%d times, want ~300", counts["a"], n)
+	}
+	if counts["b"] < 80 || counts["b"] > 120 {
+		t.Fatalf("weight-1 target selected %d/%d times, want ~100", counts["b"], n)
+	}
+}
+
+func TestPickTarget_SkipsUnhealthy(t *testing.T) {
+	a := poolTarget("a", 3)
+	b := poolTarget("b", 1)
+	a.healthy = false
+	rc := poolOf(a, b)
+
+	for i := 0; i < 50; i++ {
+		if tp := rc.pickTarget(false); tp != b {
+			t.Fatalf("unhealthy target selected: %v", tp)
+		}
+	}
+}
+
+func TestPickTarget_AllUnhealthyReturnsNil(t *testing.T) {
+	a := poolTarget("a", 3)
+	b := poolTarget("b", 1)
+	a.healthy = false
+	b.healthy = false
+	rc := poolOf(a, b)
+
+	if tp := rc.pickTarget(false); tp != nil {
+		t.Fatalf("expected nil when all targets unhealthy, got %v", tp)
+	}
+}
+
+func TestPickTarget_ZeroWeightNeverSelected(t *testing.T) {
+	rc := poolOf(poolTarget("a", 1), poolTarget("b", 0))
+	for i := 0; i < 50; i++ {
+		tp := rc.pickTarget(false)
+		if tp == nil || tp.config.Name != "a" {
+			t.Fatalf("zero-weight target selected: %v", tp)
+		}
+	}
+
+	zeroOnly := poolOf(poolTarget("z", 0))
+	if tp := zeroOnly.pickTarget(false); tp != nil {
+		t.Fatalf("pool with only zero weights must return nil, got %v", tp)
+	}
+}
+
+func TestPickTarget_NilWeightDefaultsToOne(t *testing.T) {
+	rc := poolOf(poolTargetDefaultWeight("a"))
+	if rc.totalWeight != 1 || rc.weights[0] != 1 {
+		t.Fatalf("nil weight must default to 1, got weights=%v total=%d", rc.weights, rc.totalWeight)
+	}
+	if tp := rc.pickTarget(false); tp == nil || tp.config.Name != "a" {
+		t.Fatalf("nil-weight target must be selectable, got %v", tp)
+	}
+}
+
+func TestPickTarget_HalfOpenProbeSurvivesAnotherWinner(t *testing.T) {
+	// b сканируется первым и выигрывает первый раунд; a — half-open с
+	// взведённым пробником. До исправления сканирование a потребляло пробник,
+	// поэтому после победы b таргет a навсегда исключался из выбора.
+	b := poolTarget("b", 1)
+	a := poolTarget("a", 1)
+	a.mu.Lock()
+	a.cbState = stateHalfOpen
+	a.halfOpenProbe.Store(true)
+	a.mu.Unlock()
+	rc := poolOf(b, a)
+
+	sawA := false
+	for i := 0; i < 4; i++ {
+		tp := rc.pickTarget(true)
+		if tp == nil {
+			t.Fatalf("pick %d returned nil", i)
+		}
+		if tp == a {
+			sawA = true
+			break
+		}
+	}
+	if !sawA {
+		t.Fatal("half-open recovered target was stranded after another candidate won selection")
+	}
+}
+
+func TestReload_PicksUpWeightChanges(t *testing.T) {
+	newCfg := func(weightA, weightB int) *config.Config {
+		return &config.Config{
+			Targets: []config.TargetConfig{
+				{Name: "a", URL: "http://a:9000", Timeout: time.Second, Weight: intPtr(weightA)},
+				{Name: "b", URL: "http://b:9000", Timeout: time.Second, Weight: intPtr(weightB)},
+			},
+			Routing: config.RoutingConfig{Rules: []config.RoutingRule{
+				{Host: "h", PathPrefix: "/api", TargetName: "a"},
+				{Host: "h", PathPrefix: "/api", TargetName: "b"},
+			}},
+		}
+	}
+
+	initial := newCfg(1, 1)
+	mp := &MultiProxy{
+		targets:     map[string]*TargetProxy{},
+		routeByRule: map[*config.RoutingRule]*RouteConfig{},
+		logger:      zap.NewNop(),
+	}
+	mp.config.Store(initial)
+	for i := range initial.Targets {
+		tp, err := mp.createTargetProxy(&initial.Targets[i], false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mp.targets[initial.Targets[i].Name] = tp
+	}
+	mp.rebuildRouteConfigs(initial)
+
+	if rc := mp.routeByRule[&initial.Routing.Rules[0]]; rc == nil || rc.totalWeight != 2 {
+		t.Fatalf("initial pool totalWeight = %v, want 2", rc)
+	}
+
+	updated := newCfg(3, 1)
+	if err := mp.Reload(updated); err != nil {
+		t.Fatal(err)
+	}
+
+	rc := mp.routeByRule[&updated.Routing.Rules[0]]
+	if rc == nil {
+		t.Fatal("route config missing after reload")
+	}
+	if len(rc.weights) != 2 || rc.weights[0] != 3 || rc.weights[1] != 1 {
+		t.Fatalf("weights after reload = %v, want [3 1]", rc.weights)
+	}
+	if rc.totalWeight != 4 {
+		t.Fatalf("totalWeight after reload = %d, want 4", rc.totalWeight)
+	}
+
+	counts := map[string]int{}
+	for i := 0; i < 400; i++ {
+		tp := rc.pickTarget(false)
+		if tp == nil {
+			t.Fatal("pickTarget returned nil after reload")
+		}
+		counts[tp.config.Name]++
+	}
+	if counts["a"] < 280 || counts["a"] > 320 {
+		t.Fatalf("weight-3 target selected %d/400 after reload, want ~300", counts["a"])
+	}
+}
+
+func TestProxyHandler_BalancesAcrossPool(t *testing.T) {
+	var aCount, bCount atomic.Int64
+	srvA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		aCount.Add(1)
+	}))
+	defer srvA.Close()
+	srvB := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bCount.Add(1)
+	}))
+	defer srvB.Close()
+
+	cfg := &config.Config{
+		Targets: []config.TargetConfig{
+			{Name: "a", URL: srvA.URL, Weight: intPtr(3)},
+			{Name: "b", URL: srvB.URL, Weight: intPtr(1)},
+		},
+		Routing: config.RoutingConfig{Rules: []config.RoutingRule{
+			{Host: "h", PathPrefix: "/api", TargetName: "a"},
+			{Host: "h", PathPrefix: "/api", TargetName: "b"},
+		}},
+	}
+	mp := &MultiProxy{
+		targets:     map[string]*TargetProxy{},
+		routeByRule: map[*config.RoutingRule]*RouteConfig{},
+		logger:      zap.NewNop(),
+		metrics:     NewMetrics(false),
+	}
+	mp.config.Store(cfg)
+	for i := range cfg.Targets {
+		tp, err := mp.createTargetProxy(&cfg.Targets[i], false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mp.targets[cfg.Targets[i].Name] = tp
+	}
+	mp.rebuildRouteConfigs(cfg)
+	mp.handler = mp.proxyHandler()
+
+	for i := 0; i < 40; i++ {
+		req := httptest.NewRequest("GET", "/api/x", nil)
+		req.Host = "h"
+		rec := httptest.NewRecorder()
+		mp.handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("request %d: status %d, body %s", i, rec.Code, rec.Body.String())
+		}
+	}
+	if got := aCount.Load(); got != 30 {
+		t.Fatalf("target a served %d/40, want 30", got)
+	}
+	if got := bCount.Load(); got != 10 {
+		t.Fatalf("target b served %d/40, want 10", got)
+	}
+}
+
+func TestProxyHandler_AllUnhealthyReturns503(t *testing.T) {
+	cfg := &config.Config{
+		Targets: []config.TargetConfig{{Name: "a", URL: "http://a:9000", Weight: intPtr(1)}},
+		Routing: config.RoutingConfig{Rules: []config.RoutingRule{
+			{Host: "h", PathPrefix: "/api", TargetName: "a"},
+		}},
+	}
+	mp := &MultiProxy{
+		targets:     map[string]*TargetProxy{},
+		routeByRule: map[*config.RoutingRule]*RouteConfig{},
+		logger:      zap.NewNop(),
+		metrics:     NewMetrics(false),
+	}
+	mp.config.Store(cfg)
+	tp, err := mp.createTargetProxy(&cfg.Targets[0], false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tp.healthy = false
+	mp.targets["a"] = tp
+	mp.rebuildRouteConfigs(cfg)
+	mp.handler = mp.proxyHandler()
+
+	req := httptest.NewRequest("GET", "/api/x", nil)
+	req.Host = "h"
+	rec := httptest.NewRecorder()
+	mp.handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
 	}
 }

@@ -28,8 +28,77 @@ import (
 
 type RouteConfig struct {
 	Rule      *config.RoutingRule
-	Target    *config.TargetConfig
 	RateLimit *IPRateLimiter
+
+	// Targets — пул кандидатов одного route: все таргеты правил, совпадающих
+	// по (host, path_prefix, methods). weights[i] — вес Targets[i],
+	// totalWeight — их сумма (кандидаты с весом <= 0 в неё не входят).
+	// counter — общий счётчик взвешенного round-robin; запросы идут
+	// параллельно, поэтому только atomic.
+	Targets     []*TargetProxy
+	weights     []int
+	totalWeight int
+	counter     atomic.Uint64
+}
+
+// pickTarget выбирает следующий таргет пула взвешенным round-robin.
+// Нездоровые кандидаты и кандидаты с весом <= 0 пропускаются.
+// Если здоровых кандидатов с положительным весом нет — возвращает nil,
+// и вызывающая сторона отдаёт 503.
+func (rc *RouteConfig) pickTarget(cbEnabled bool) *TargetProxy {
+	if rc == nil || rc.totalWeight <= 0 {
+		return nil
+	}
+
+	// Быстрый путь для обычного роута с одним таргетом: без аллокации и
+	// без инкремента счётчика.
+	if len(rc.Targets) == 1 {
+		tp := rc.Targets[0]
+		if rc.weights[0] <= 0 || !tp.acquire(cbEnabled) {
+			return nil
+		}
+		return tp
+	}
+
+	type candidate struct {
+		target *TargetProxy
+		weight int
+	}
+	// Half-open пробник расходуется только выбранным таргетом: кандидаты
+	// проверяются read-only (eligible), а acquire вызывается на победителе.
+	// Иначе проигравший кандидат «сжёг» бы пробник и остался навсегда
+	// исключённым, пока его не переведёт другой путь.
+	for attempt := 0; attempt <= len(rc.Targets); attempt++ {
+		healthy := make([]candidate, 0, len(rc.Targets))
+		sum := 0
+		for i, tp := range rc.Targets {
+			w := rc.weights[i]
+			if w <= 0 || !tp.eligible(cbEnabled) {
+				continue
+			}
+			healthy = append(healthy, candidate{target: tp, weight: w})
+			sum += w
+		}
+		if sum <= 0 {
+			return nil
+		}
+
+		n := rc.counter.Add(1) - 1
+		pos := int(n % uint64(sum))
+		chosen := healthy[len(healthy)-1].target
+		for _, c := range healthy {
+			if pos < c.weight {
+				chosen = c.target
+				break
+			}
+			pos -= c.weight
+		}
+		if chosen.acquire(cbEnabled) {
+			return chosen
+		}
+		// Пробник забрал параллельный запрос — пересчитываем кандидатов.
+	}
+	return nil
 }
 
 var corsHeaders = map[string]string{
@@ -78,7 +147,7 @@ const (
 type MultiProxy struct {
 	config             atomic.Pointer[config.Config]
 	targets            map[string]*TargetProxy
-	routeConfigs       []RouteConfig
+	routeConfigs       []*RouteConfig
 	routeByRule        map[*config.RoutingRule]*RouteConfig
 	jwtValidator       *jwtutil.JWTValidator
 	logger             *zap.Logger
@@ -145,15 +214,7 @@ func NewMultiProxy(cfg *config.Config, logger *zap.Logger) (*MultiProxy, error) 
 		mp.targets[targetCfg.Name] = targetProxy
 	}
 
-	for i := range cfg.Routing.Rules {
-		rule := &cfg.Routing.Rules[i]
-		rc := RouteConfig{Rule: rule, Target: cfg.GetTargetByName(rule.TargetName)}
-		if rule.RateLimit != nil {
-			rc.RateLimit = NewIPRateLimiter(rule.RateLimit.RequestsPerSecond, rule.RateLimit.Burst)
-		}
-		mp.routeConfigs = append(mp.routeConfigs, rc)
-		mp.routeByRule[rule] = &mp.routeConfigs[len(mp.routeConfigs)-1]
-	}
+	mp.rebuildRouteConfigs(cfg)
 
 	// Строим middleware цепочку
 	handler := mp.proxyHandler()
@@ -576,7 +637,7 @@ func (mp *MultiProxy) proxyRequest(w http.ResponseWriter, r *http.Request, targe
 	}
 
 	if r.Body != nil {
-		if maxSize := mp.config.Load().Server.MaxRequestBodySize; maxSize > 0 {
+		if maxSize := mp.config.Load().Server.EffectiveMaxRequestBodySize(); maxSize > 0 {
 			r.Body = io.NopCloser(io.LimitReader(r.Body, maxSize))
 		}
 	}
@@ -640,11 +701,16 @@ func (mp *MultiProxy) logAccess(reqID, traceID string, r *http.Request, statusCo
 	)
 }
 
-// isHealthy возвращает статус здоровья таргета (учитывая circuit breaker)
-func (tp *TargetProxy) isHealthy(cbEnabled bool) bool {
-	tp.mu.RLock()
-	defer tp.mu.RUnlock()
+// eligible сообщает, можно ли выбрать таргет, НЕ расходуя half-open пробник.
+// Истёкшая открытая цепь лениво переводится в half-open со взведённым
+// пробником, чтобы последующий acquire мог его забрать.
+func (tp *TargetProxy) eligible(cbEnabled bool) bool {
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+	return tp.eligibleLocked(cbEnabled)
+}
 
+func (tp *TargetProxy) eligibleLocked(cbEnabled bool) bool {
 	if !tp.healthy {
 		return false
 	}
@@ -663,6 +729,37 @@ func (tp *TargetProxy) isHealthy(cbEnabled bool) bool {
 			return true
 		}
 		return false
+	case stateHalfOpen:
+		return tp.halfOpenProbe.Load()
+	}
+	return true
+}
+
+// acquire подтверждает выбор таргета и расходует half-open пробник. Возвращает
+// false, если таргет больше не доступен (например, пробник уже забрал
+// параллельный запрос) — тогда вызывающая сторона выбирает заново.
+func (tp *TargetProxy) acquire(cbEnabled bool) bool {
+	tp.mu.Lock()
+	defer tp.mu.Unlock()
+
+	if !tp.healthy {
+		return false
+	}
+
+	if !cbEnabled {
+		return true
+	}
+
+	switch tp.cbState {
+	case stateClosed:
+		return true
+	case stateOpen:
+		if time.Since(tp.cbLastFailure) <= tp.cbTimeout {
+			return false
+		}
+		tp.cbState = stateHalfOpen
+		tp.halfOpenProbe.Store(true)
+		return tp.halfOpenProbe.CompareAndSwap(true, false)
 	case stateHalfOpen:
 		return tp.halfOpenProbe.CompareAndSwap(true, false)
 	}
@@ -841,22 +938,46 @@ func targetChanged(old, next *config.TargetConfig) bool {
 	}
 	return old.URL != next.URL ||
 		old.Timeout != next.Timeout ||
-		old.HealthCheck != next.HealthCheck
+		old.HealthCheck != next.HealthCheck ||
+		old.EffectiveWeight() != next.EffectiveWeight()
 }
 
+// rebuildRouteConfigs пересобирает route-пулы из правил и уже созданных
+// прокси (mp.targets). Правила, совпадающие по (host, path_prefix, methods),
+// попадают в один RouteConfig: так несколько статических таргетов одного
+// роута балансируются взвешенно.
 func (mp *MultiProxy) rebuildRouteConfigs(cfg *config.Config) {
-	mp.routeConfigs = nil
-	mp.routeByRule = make(map[*config.RoutingRule]*RouteConfig)
+	routeConfigs := make([]*RouteConfig, 0, len(cfg.Routing.Rules))
+	routeByRule := make(map[*config.RoutingRule]*RouteConfig, len(cfg.Routing.Rules))
+	groups := make(map[string]*RouteConfig)
 
 	for i := range cfg.Routing.Rules {
 		rule := &cfg.Routing.Rules[i]
-		rc := RouteConfig{Rule: rule, Target: cfg.GetTargetByName(rule.TargetName)}
-		if rule.RateLimit != nil {
-			rc.RateLimit = NewIPRateLimiter(rule.RateLimit.RequestsPerSecond, rule.RateLimit.Burst)
+		key := config.RuleRouteKey(*rule)
+		rc := groups[key]
+		if rc == nil {
+			rc = &RouteConfig{Rule: rule}
+			if rule.RateLimit != nil {
+				rc.RateLimit = NewIPRateLimiter(rule.RateLimit.RequestsPerSecond, rule.RateLimit.Burst)
+			}
+			groups[key] = rc
+			routeConfigs = append(routeConfigs, rc)
 		}
-		mp.routeConfigs = append(mp.routeConfigs, rc)
-		mp.routeByRule[rule] = &mp.routeConfigs[len(mp.routeConfigs)-1]
+
+		if tp := mp.targets[rule.TargetName]; tp != nil {
+			weight := tp.config.EffectiveWeight()
+			if weight < 0 {
+				weight = 0
+			}
+			rc.Targets = append(rc.Targets, tp)
+			rc.weights = append(rc.weights, weight)
+			rc.totalWeight += weight
+		}
+		routeByRule[rule] = rc
 	}
+
+	mp.routeConfigs = routeConfigs
+	mp.routeByRule = routeByRule
 }
 
 func (mp *MultiProxy) Stop(ctx context.Context) error {

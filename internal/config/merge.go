@@ -1,10 +1,15 @@
 package config
 
+import (
+	"sort"
+	"strings"
+)
+
 // Merge возвращает новый конфиг: base + обнаруженные таргеты и правила.
 // Base не мутируется. При конфликте приоритет у статики: таргет с уже
-// существующим именем и правило с уже существующей парой (host, path_prefix)
-// пропускаются. Обнаруженные правила, ссылающиеся на неизвестный таргет,
-// отбрасываются.
+// существующим именем и правило с уже существующей парой (host, path_prefix,
+// methods, target_name) пропускаются. Обнаруженные правила, ссылающиеся на
+// неизвестный таргет, отбрасываются.
 //
 // Merge копирует Config поверхностно: вложенные срезы и указатели (Targets,
 // Routing.Rules, TLS и т.п.) переиспользуются. Мутировать их на месте нельзя —
@@ -28,15 +33,25 @@ func Merge(base *Config, targets []TargetConfig, rules []RoutingRule) *Config {
 		merged.Targets = append(merged.Targets, t)
 	}
 
+	// Дефолт веса применяется и к обнаруженным таргетам: они минуют
+	// Config.setDefaults. nil (label не задан) → 1; явный 0 или отрицательное
+	// значение сохраняется и исключает таргет из пула.
+	for i := range merged.Targets {
+		if merged.Targets[i].Weight == nil {
+			weight := 1
+			merged.Targets[i].Weight = &weight
+		}
+	}
+
 	merged.Routing.Rules = make([]RoutingRule, 0, len(base.Routing.Rules)+len(rules))
 	merged.Routing.Rules = append(merged.Routing.Rules, base.Routing.Rules...)
 
 	seenRules := make(map[string]bool, len(base.Routing.Rules))
 	for _, r := range base.Routing.Rules {
-		seenRules[ruleKey(r.Host, r.PathPrefix)] = true
+		seenRules[ruleKey(r)] = true
 	}
 	for _, r := range rules {
-		key := ruleKey(r.Host, r.PathPrefix)
+		key := ruleKey(r)
 		if seenRules[key] {
 			continue
 		}
@@ -53,6 +68,27 @@ func Merge(base *Config, targets []TargetConfig, rules []RoutingRule) *Config {
 	return &merged
 }
 
-func ruleKey(host, pathPrefix string) string {
-	return host + "\x00" + pathPrefix
+// RuleRouteKey возвращает канонический ключ route, который матчит правило:
+// host, path_prefix и множество методов (без учёта порядка и регистра).
+// Правила с одинаковым ключом образуют один пул балансировки.
+func RuleRouteKey(r RoutingRule) string {
+	return r.Host + "\x00" + r.PathPrefix + "\x00" + methodsKey(r.Methods)
+}
+
+// ruleKey идентифицирует правило для дедупликации: route + имя таргета.
+// Разные таргеты одного route сохраняются — из них собирается пул.
+func ruleKey(r RoutingRule) string {
+	return RuleRouteKey(r) + "\x00" + r.TargetName
+}
+
+func methodsKey(methods []string) string {
+	if len(methods) == 0 {
+		return ""
+	}
+	normalized := make([]string, len(methods))
+	for i, m := range methods {
+		normalized[i] = strings.ToUpper(strings.TrimSpace(m))
+	}
+	sort.Strings(normalized)
+	return strings.Join(normalized, ",")
 }

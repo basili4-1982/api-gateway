@@ -24,7 +24,8 @@ application:
 #     - "api.yourdomain.com"
 #   email: "admin@yourdomain.com"
 #   cache_dir: "/var/lib/api-gateway/certs"
-#   staging: false
+#   staging: false                # true → ACME staging CA + cache_dir/staging
+#   directory_url: ""             # необязательно: свой ACME directory URL (перекрывает staging)
 #   redirect_http: true
 
 targets:
@@ -152,7 +153,7 @@ headers:
 
 logging:
   level: "debug"
-  format: "console"
+  format: "console"            # json | console | text (text — алиас console)
   # access_log: true              # построчный лог каждого запроса; выкл. по умолчанию (доп. расходы на запрос)
 
 # Service discovery (Docker/Podman по labels). Если enabled: true, targets и

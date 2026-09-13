@@ -31,7 +31,7 @@ func main() {
 		}()
 	}
 
-	cfg, err := config.Load(*configPath)
+	cfg, warnings, err := config.Load(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
@@ -44,6 +44,10 @@ func main() {
 			return
 		}
 		os.Exit(1)
+	}
+
+	for _, key := range warnings {
+		log.Warn("Unknown config key", zap.String("key", key))
 	}
 	defer func(log *zap.Logger) {
 		err := log.Sync()
@@ -103,10 +107,13 @@ func main() {
 			switch sig {
 			case syscall.SIGHUP:
 				log.Info("Received SIGHUP, reloading configuration...")
-				newCfg, err := config.Load(*configPath)
+				newCfg, warnings, err := config.Load(*configPath)
 				if err != nil {
 					log.Error("Failed to reload config", zap.Error(err))
 					continue
+				}
+				for _, key := range warnings {
+					log.Warn("Unknown config key", zap.String("key", key))
 				}
 				// SetBase — единственный путь: он пересобирает конфиг с последним
 				// discovery-результатом и сам вызывает Reload (работает и при

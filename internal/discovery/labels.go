@@ -66,7 +66,7 @@ func ParseContainers(containers []Container, opts ParseOptions) Result {
 			Name:    name,
 			URL:     baseURL,
 			Timeout: timeout,
-			Weight:  atoi(labelValue(c.Labels, opts.LabelPrefix, "weight")),
+			Weight:  parseWeight(labelValue(c.Labels, opts.LabelPrefix, "weight")),
 		}
 		if health := labelValue(c.Labels, opts.LabelPrefix, "health"); health != "" {
 			if strings.HasPrefix(health, "http://") || strings.HasPrefix(health, "https://") {
@@ -165,9 +165,18 @@ func parseBool(v string) bool {
 	}
 }
 
-func atoi(v string) int {
-	n, _ := strconv.Atoi(v)
-	return n
+// parseWeight разбирает label веса. Пустое или невалидное значение → nil
+// (дефолт 1); явный 0 и отрицательные сохраняются, чтобы исключать таргет
+// из пула.
+func parseWeight(v string) *int {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return nil
+	}
+	return &n
 }
 
 // routerFields — множество полей роутера, допустимых в labels.
