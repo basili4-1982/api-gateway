@@ -1,0 +1,18 @@
+# Traefik external-auth scenario (scenario: auth/traefik/forwardauth).
+# Every request is forwarded to the auth service before reaching the backend, so this
+# config isolates the cost of an external synchronous auth hop.
+http:
+  middlewares:
+    fwd:
+      forwardAuth:
+        address: "http://auth:80/"
+  routers:
+    all:
+      rule: "PathPrefix(`/`)"
+      service: backend
+      middlewares: ["fwd"]
+  services:
+    backend:
+      loadBalancer:
+        servers:
+          - url: "http://backend:80"

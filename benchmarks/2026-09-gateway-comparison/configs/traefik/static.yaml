@@ -1,0 +1,12 @@
+# Traefik proxy-only baseline, static config (scenarios: proxy-only / proxy-memory).
+# The file provider points at the mounted dynamic config; accessLog is explicitly null
+# (disabled) so logging stays off the hot path.
+entryPoints:
+  web:
+    address: ":80"
+providers:
+  file:
+    filename: /etc/traefik/dynamic.yml
+log:
+  level: "error"
+accessLog: null

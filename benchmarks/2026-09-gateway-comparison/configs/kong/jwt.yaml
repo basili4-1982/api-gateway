@@ -1,0 +1,20 @@
+# Kong built-in JWT scenario (scenario: auth/kong/jwt).
+# The jwt plugin validates HS256 tokens for consumer "bench". "benchsecret" is a
+# non-secret, benchmark-only secret and must match the token used by the load client.
+# Kong declarative config does not expand ${VAR}, so the literal is kept intentionally.
+_format_version: "3.0"
+consumers:
+- username: bench
+  jwt_secrets:
+  - key: bench
+    algorithm: HS256
+    secret: benchsecret
+services:
+- name: backend
+  url: http://backend:80
+  routes:
+  - name: all
+    paths:
+    - /
+  plugins:
+  - name: jwt

@@ -1,0 +1,11 @@
+# Kong proxy-only baseline (scenarios: proxy-only / proxy-memory).
+# DB-less declarative config. Kong runs with KONG_DATABASE=off, KONG_NGINX_WORKER_PROCESSES=2
+# and access logs disabled via KONG_PROXY_ACCESS_LOG=/dev/null (set as container env).
+_format_version: "3.0"
+services:
+- name: backend
+  url: http://backend:80
+  routes:
+  - name: all
+    paths:
+    - /

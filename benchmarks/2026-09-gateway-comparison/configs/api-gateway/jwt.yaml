@@ -1,0 +1,27 @@
+# api-gateway built-in JWT scenario (scenario: auth/api-gateway/jwt).
+# JWT validation runs in-process (HS256, exp checked); there is no external auth hop.
+# "benchsecret" is a non-secret, benchmark-only key and must match the token used by the
+# load client. Access logging is off; level "error" keeps logs off the hot path.
+server:
+  port: 8080
+application:
+  env: "prod"
+  health_check: false
+  circuit_breaker: false
+  metrics_enabled: false
+jwt:
+  required: true
+  secret_key: "benchsecret"
+  algorithm: "HS256"
+  validate_exp: true
+targets:
+  - name: "backend"
+    url: "http://backend:80"
+    timeout: 30s
+routing:
+  rules:
+    - path_prefix: "/"
+      target_name: "backend"
+logging:
+  level: "error"
+  access_log: false
