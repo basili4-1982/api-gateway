@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -382,6 +383,36 @@ targets:
 	}
 	if cfg.MaxIdleConnsPerHost != 250 {
 		t.Errorf("max_idle_conns_per_host = %d, want 250", cfg.MaxIdleConnsPerHost)
+	}
+}
+
+func TestLoad_LoggingFormatAccepted(t *testing.T) {
+	for _, format := range []string{"console", "text", "json"} {
+		t.Run(format, func(t *testing.T) {
+			yaml := "targets:\n  - name: \"api\"\n    url: \"http://api:9001\"\nlogging:\n  format: \"" + format + "\"\n"
+			path := writeTempConfig(t, yaml)
+			if _, err := Load(path); err != nil {
+				t.Fatalf("logging.format %q must be accepted: %v", format, err)
+			}
+		})
+	}
+}
+
+func TestLoad_RejectsUnknownLoggingFormat(t *testing.T) {
+	yaml := `
+targets:
+  - name: "api"
+    url: "http://api:9001"
+logging:
+  format: "xml"
+`
+	path := writeTempConfig(t, yaml)
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for unknown logging.format")
+	}
+	if !strings.Contains(err.Error(), "logging.format") || !strings.Contains(err.Error(), "xml") {
+		t.Errorf("error must name the field and value, got: %v", err)
 	}
 }
 
