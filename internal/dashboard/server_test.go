@@ -195,8 +195,14 @@ targets:
 	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
 	}
-	if len(status.Errors) != 2 {
-		t.Fatalf("len(Errors) = %d, want 2: %v", len(status.Errors), status.Errors)
+	if len(status.Errors) != 1 {
+		t.Fatalf("len(Errors) = %d, want 1 (metrics only; config loads leniently): %v", len(status.Errors), status.Errors)
+	}
+	if status.Config == nil {
+		t.Fatal("Config = nil, want a lenient config summary")
+	}
+	if len(status.Config.Targets) != 1 || strings.Contains(status.Config.Targets[0].URL, "SUPER_SECRET_PASS") {
+		t.Errorf("target URL not redacted: %+v", status.Config.Targets)
 	}
 }
 
