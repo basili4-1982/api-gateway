@@ -24,7 +24,8 @@ application:
 #     - "api.yourdomain.com"
 #   email: "admin@yourdomain.com"
 #   cache_dir: "/var/lib/api-gateway/certs"
-#   staging: false
+#   staging: false                # true → ACME staging CA + cache_dir/staging
+#   directory_url: ""             # необязательно: свой ACME directory URL (перекрывает staging)
 #   redirect_http: true
 
 targets:

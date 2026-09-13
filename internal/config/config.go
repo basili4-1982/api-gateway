@@ -53,8 +53,11 @@ type TLSConfig struct {
 	Domains      []string `yaml:"domains"`       // домены для сертификатов
 	Email        string   `yaml:"email"`         // email для Let's Encrypt (обязательно)
 	CacheDir     string   `yaml:"cache_dir"`     // директория для кеша сертификатов
-	Staging      bool     `yaml:"staging"`       // true = тестовый CA, false = production Let's Encrypt
+	Staging      bool     `yaml:"staging"`       // true = staging CA, false = production Let's Encrypt
 	RedirectHTTP bool     `yaml:"redirect_http"` // автоматический redirect HTTP → HTTPS
+	// DirectoryURL — необязательный ACME directory URL. Если задан, перекрывает
+	// выбор CA по staging. Пусто = staging ? Let's Encrypt staging : production.
+	DirectoryURL string `yaml:"directory_url"`
 }
 
 // StaticApp конфигурация SPA фронтенда
