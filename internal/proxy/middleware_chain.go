@@ -297,9 +297,11 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 			return
 		}
 
-		// Читаем тело запроса для передачи в аудит
+		// Читаем тело запроса для передачи в аудит. Чтение ограничено тем же
+		// лимитом, что и проксирование, чтобы аудит не вычитывал тело
+		// неограниченно (max_request_body_size: 0 → без лимита).
 		if r.Body != nil && (r.Method == "POST" || r.Method == "PUT" || r.Method == "PATCH" || r.Method == "QUERY") {
-			bodyBytes, _ := io.ReadAll(r.Body)
+			bodyBytes, _ := readBodyLimited(r.Body, mp.config.Load().Server.EffectiveMaxRequestBodySize())
 			r.Body.Close()
 			if len(bodyBytes) > 0 && len(bodyBytes) < 65536 {
 				r = r.WithContext(context.WithValue(r.Context(), ctxKeyRequestBody, bodyBytes))
@@ -340,4 +342,13 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 
 		mp.logAccess(reqID, traceID, r, rw.statusCode, time.Since(startTime), target)
 	})
+}
+
+// readBodyLimited читает тело не более чем limit байт. limit <= 0 — без лимита.
+// Используется аудитом, чтобы не вычитывать тело запроса без ограничения.
+func readBodyLimited(body io.Reader, limit int64) ([]byte, error) {
+	if limit > 0 {
+		body = io.LimitReader(body, limit)
+	}
+	return io.ReadAll(body)
 }

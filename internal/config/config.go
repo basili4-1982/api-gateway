@@ -85,11 +85,27 @@ type App struct {
 
 // ServerConfig конфигурация HTTP сервера
 type ServerConfig struct {
-	Port               int           `yaml:"port"`
-	ReadTimeout        time.Duration `yaml:"read_timeout"`
-	WriteTimeout       time.Duration `yaml:"write_timeout"`
-	IdleTimeout        time.Duration `yaml:"idle_timeout"`
-	MaxRequestBodySize int64         `yaml:"max_request_body_size"` // макс. размер тела запроса (байт), 0 = без лимита
+	Port         int           `yaml:"port"`
+	ReadTimeout  time.Duration `yaml:"read_timeout"`
+	WriteTimeout time.Duration `yaml:"write_timeout"`
+	IdleTimeout  time.Duration `yaml:"idle_timeout"`
+	// MaxRequestBodySize — лимит тела запроса в байтах.
+	// nil (ключ не задан) → значение по умолчанию 10 MiB;
+	// 0 → без лимита; >0 → лимит в байтах.
+	MaxRequestBodySize *int64 `yaml:"max_request_body_size"`
+}
+
+// defaultMaxRequestBodySize применяется, когда max_request_body_size не задан.
+const defaultMaxRequestBodySize int64 = 10 << 20 // 10 MiB
+
+// EffectiveMaxRequestBodySize возвращает действующий лимит тела запроса в
+// байтах. nil трактуется как значение по умолчанию (10 MiB); значение <= 0
+// означает отсутствие лимита.
+func (s ServerConfig) EffectiveMaxRequestBodySize() int64 {
+	if s.MaxRequestBodySize == nil {
+		return defaultMaxRequestBodySize
+	}
+	return *s.MaxRequestBodySize
 }
 
 // TargetConfig конфигурация целевого сервера
@@ -293,8 +309,10 @@ func (c *Config) setDefaults() {
 	if c.Server.IdleTimeout == 0 {
 		c.Server.IdleTimeout = 120 * time.Second
 	}
-	if c.Server.MaxRequestBodySize == 0 {
-		c.Server.MaxRequestBodySize = 10 << 20 // 10 MB
+	if c.Server.MaxRequestBodySize == nil {
+		// Ключ не задан → дефолт 10 MiB. Явный 0 остаётся без лимита.
+		size := defaultMaxRequestBodySize
+		c.Server.MaxRequestBodySize = &size
 	}
 
 	if c.TLS != nil && c.TLS.Enabled {
