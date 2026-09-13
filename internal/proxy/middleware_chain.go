@@ -264,7 +264,7 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 			mp.mu.RLock()
 			targetProxy = mp.targets[target.Name]
 			mp.mu.RUnlock()
-			if targetProxy != nil && !targetProxy.isHealthy(cbEnabled) {
+			if targetProxy != nil && !targetProxy.acquire(cbEnabled) {
 				targetProxy = nil
 			}
 		}
