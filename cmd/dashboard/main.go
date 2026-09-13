@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,6 +25,11 @@ func main() {
 	refresh := flag.Duration("refresh", 5*time.Second, "HTML auto-refresh interval")
 	basicAuth := flag.String("basic-auth", "", "optional user:password Basic Auth for all routes")
 	flag.Parse()
+
+	if err := validateBasicAuth(*basicAuth); err != nil {
+		fmt.Fprintf(os.Stderr, "dashboard: %v\n", err)
+		os.Exit(1)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -40,20 +47,40 @@ func main() {
 	}
 }
 
+// validateBasicAuth rejects a non-empty -basic-auth value that is not in the
+// "user:password" form. The value itself is never echoed back: it is a secret.
+func validateBasicAuth(v string) error {
+	if v == "" {
+		return nil
+	}
+	if !strings.Contains(v, ":") {
+		return errors.New("-basic-auth must be in user:password form (missing ':')")
+	}
+	return nil
+}
+
 func run(ctx context.Context, listen string, srv *dashboard.Server, out io.Writer) error {
 	httpSrv := &http.Server{
 		Addr:              listen,
 		Handler:           srv.Handler(),
+		ReadTimeout:       5 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
+
+	ln, err := net.Listen("tcp", listen)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "dashboard listening on %s\n", ln.Addr())
 
 	errCh := make(chan error, 1)
 	go func() {
-		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()
-	fmt.Fprintf(out, "dashboard listening on %s\n", listen)
 
 	select {
 	case err := <-errCh:

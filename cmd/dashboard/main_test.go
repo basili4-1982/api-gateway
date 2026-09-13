@@ -29,4 +29,28 @@ func TestRunListenError(t *testing.T) {
 	if err := run(context.Background(), "invalid-address", srv, &out); err == nil {
 		t.Fatal("run() error = nil, want listen error")
 	}
+	if strings.Contains(out.String(), "listening") {
+		t.Errorf("output = %q, must not log listening before a successful bind", out.String())
+	}
+}
+
+func TestValidateBasicAuth(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		wantErr bool
+	}{
+		{name: "empty allowed", in: "", wantErr: false},
+		{name: "user and password", in: "admin:secret", wantErr: false},
+		{name: "empty password allowed", in: "admin:", wantErr: false},
+		{name: "missing colon rejected", in: "admin", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateBasicAuth(tt.in)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateBasicAuth(%q) error = %v, wantErr %v", tt.in, err, tt.wantErr)
+			}
+		})
+	}
 }

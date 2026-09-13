@@ -123,21 +123,21 @@ func (s *Server) collect(ctx context.Context) *Status {
 	status := &Status{Errors: []string{}}
 	if s.cfg.ConfigPath != "" {
 		if c, err := LoadConfigSummary(s.cfg.ConfigPath); err != nil {
-			status.Errors = append(status.Errors, "config: "+err.Error())
+			status.Errors = append(status.Errors, "config: "+redactCredentials(err.Error()))
 		} else {
 			status.Config = c
 		}
 	}
 	if s.cfg.DiscoveryState != "" {
 		if d, err := LoadDiscoverySummary(s.cfg.DiscoveryState); err != nil {
-			status.Errors = append(status.Errors, "discovery: "+err.Error())
+			status.Errors = append(status.Errors, "discovery: "+redactCredentials(err.Error()))
 		} else {
 			status.Discovery = d
 		}
 	}
 	if s.cfg.MetricsURL != "" {
 		if m, err := scrapeMetrics(ctx, s.client, s.cfg.MetricsURL); err != nil {
-			status.Errors = append(status.Errors, "metrics: "+err.Error())
+			status.Errors = append(status.Errors, "metrics: "+redactCredentials(err.Error()))
 		} else {
 			status.Metrics = m
 		}
