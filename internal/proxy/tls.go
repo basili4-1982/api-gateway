@@ -43,6 +43,20 @@ func buildCertManager(tls *config.TLSConfig) *autocert.Manager {
 	return manager
 }
 
+// metricsOverHTTPHandler отдаёт /metrics напрямую (мидлварь внутри main
+// проверяет metrics_allowed_ips), а остальные запросы отправляет на редирект
+// HTTP→HTTPS. Нужно, чтобы дашборд мог скрейпить метрики по внутренней сети
+// без TLS (autocert требует SNI и не работает по IP).
+func metricsOverHTTPHandler(main, redirect http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/metrics" {
+			main.ServeHTTP(w, r)
+			return
+		}
+		redirect.ServeHTTP(w, r)
+	})
+}
+
 func (mp *MultiProxy) startTLS() error {
 	tls := mp.config.Load().TLS
 
@@ -58,7 +72,7 @@ func (mp *MultiProxy) startTLS() error {
 	}
 	mp.httpsServer = tlsServer
 
-	httpHandler := certManager.HTTPHandler(mp.httpRedirectHandler())
+	httpHandler := certManager.HTTPHandler(metricsOverHTTPHandler(mp, mp.httpRedirectHandler()))
 	httpServer := &http.Server{
 		Addr:        fmt.Sprintf(":%d", tls.HTTPPort),
 		Handler:     httpHandler,

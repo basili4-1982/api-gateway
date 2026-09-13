@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
@@ -66,5 +68,31 @@ func TestBuildCertManager_DirectoryURLOverride(t *testing.T) {
 	}
 	if want := filepath.Join("/var/lib/api-gateway/certs", "staging"); string(cache) != want {
 		t.Errorf("staging cache dir = %q, want %q", string(cache), want)
+	}
+}
+
+func TestMetricsOverHTTPHandler(t *testing.T) {
+	main := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("metrics"))
+	})
+	redirect := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMovedPermanently)
+	})
+	h := metricsOverHTTPHandler(main, redirect)
+
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/metrics", http.StatusOK},
+		{"/", http.StatusMovedPermanently},
+		{"/api/blog", http.StatusMovedPermanently},
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if rec.Code != tc.want {
+			t.Errorf("%s: got %d, want %d", tc.path, rec.Code, tc.want)
+		}
 	}
 }
