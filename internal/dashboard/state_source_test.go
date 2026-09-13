@@ -72,4 +72,7 @@ func TestRedactURL(t *testing.T) {
 	if got := redactURL("http://example.com:8080/path"); got != "http://example.com:8080/path" {
 		t.Errorf("redactURL() = %q, want unchanged", got)
 	}
+	if got := redactURL("http://user:pass@exa mple.com"); got != "http://exa mple.com" {
+		t.Errorf("redactURL() = %q, want malformed URL credentials stripped", got)
+	}
 }

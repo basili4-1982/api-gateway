@@ -1016,3 +1016,72 @@ targets:
 		t.Fatalf("env = %q, want %q", cfg.Env, "${LITERAL}")
 	}
 }
+
+func TestLoadLenient_MissingEnvStaysLiteral(t *testing.T) {
+	os.Unsetenv("TEST_LENIENT_MISSING")
+	path := writeTempConfig(t, `
+application:
+  env: "${TEST_LENIENT_MISSING}"
+targets:
+  - name: backend
+    url: "http://backend:80"
+`)
+	cfg, _, err := LoadLenient(path)
+	if err != nil {
+		t.Fatalf("lenient load must not fail on a missing env var: %v", err)
+	}
+	if cfg.Env != "${TEST_LENIENT_MISSING}" {
+		t.Fatalf("env = %q, want literal %q", cfg.Env, "${TEST_LENIENT_MISSING}")
+	}
+}
+
+func TestLoadLenient_ExpandsDefinedEnv(t *testing.T) {
+	t.Setenv("TEST_LENIENT_VALUE", "prod-x")
+	path := writeTempConfig(t, `
+application:
+  env: "${TEST_LENIENT_VALUE}"
+targets:
+  - name: backend
+    url: "http://backend:80"
+`)
+	cfg, _, err := LoadLenient(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Env != "prod-x" {
+		t.Fatalf("env = %q, want %q", cfg.Env, "prod-x")
+	}
+}
+
+func TestLoadLenient_NoTargets(t *testing.T) {
+	path := writeTempConfig(t, "targets: []\n")
+	cfg, _, err := LoadLenient(path)
+	if err != nil {
+		t.Fatalf("lenient load must not require targets: %v", err)
+	}
+	if len(cfg.Targets) != 0 {
+		t.Fatalf("targets = %d, want 0", len(cfg.Targets))
+	}
+}
+
+func TestLoadLenient_WarnsOnUnknownKeys(t *testing.T) {
+	path := writeTempConfig(t, `
+bogus_top: true
+server:
+  port: 8080
+  bogus_nested: 1
+targets:
+  - name: "api"
+    url: "http://api:9001"
+    bogus_target: x
+`)
+	_, warnings, err := LoadLenient(path)
+	if err != nil {
+		t.Fatalf("unknown keys must not fail lenient loading: %v", err)
+	}
+	for _, want := range []string{"bogus_top", "server.bogus_nested", "targets.bogus_target"} {
+		if !hasWarning(warnings, want) {
+			t.Errorf("expected warning %q, got %v", want, warnings)
+		}
+	}
+}
