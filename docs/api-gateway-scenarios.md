@@ -125,6 +125,9 @@ jwt:
 permissions:
   enabled: true
   service_url: "http://permissions:8080"
+  method: "GET"                                          # по умолчанию
+  path: "/api/v1/users/{user_id}/effective-permissions"  # по умолчанию; {user_id} обязателен
+  api_key_header: "X-API-Key"                            # по умолчанию
   cache_ttl: 300s
   header_name: "X-User-Permissions"
   api_key: "${PERMISSIONS_KEY}"
