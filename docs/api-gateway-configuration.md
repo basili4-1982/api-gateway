@@ -298,7 +298,7 @@ JWT (Authorization: Bearer / cookie cml_access)
    кеш по user_id ── hit ────────────────────────────┐
         │ miss                                        │
         ▼                                             │
-GET {service_url}/api/v1/users/{id}/effective-permissions
+{method} {service_url}{path}  ({user_id} подставляется)
         │                                             │
         ├─ 200: кешируем, берём permissions ──────────┘
         └─ иное: ошибка, заголовок не выставляется, запрос идёт дальше
@@ -317,16 +317,19 @@ X-User-Permissions: "orders:read,orders:write"   (только если спис
 
 ### Контракт permission-сервиса
 
-Шлюз вызывает один эндпоинт:
+Шлюз вызывает один эндпоинт, собранный из `method`, `service_url` и `path`:
 
 ```
-GET {service_url}/api/v1/users/{user_id}/effective-permissions
-X-API-Key: {api_key}        # только если api_key задан
+{method} {service_url}{path}
+{api_key_header}: {api_key}        # только если api_key задан
 ```
 
-- `{user_id}` — целое число, полученное из claim `id`.
-- Заголовок `X-API-Key` добавляется, только если `api_key` непустой.
+- `{method}` — `permissions.method` (по умолчанию `GET`).
+- `{path}` — `permissions.path` (по умолчанию `/api/v1/users/{user_id}/effective-permissions`); подстрока `{user_id}` заменяется на целое число, полученное из claim `id`. Плейсхолдер `{user_id}` обязателен, иначе загрузка конфига завершается ошибкой.
+- `{api_key_header}` — `permissions.api_key_header` (по умолчанию `X-API-Key`); заголовок добавляется, только если `api_key` непустой.
 - Таймаут HTTP-клиента — 5 секунд.
+
+Если `method`, `path` и `api_key_header` не заданы, поведение прежнее: `GET {service_url}/api/v1/users/{user_id}/effective-permissions` с заголовком `X-API-Key`. Существующему permission-сервису менять ничего не нужно — достаточно не добавлять новые поля.
 
 Успешный ответ — HTTP 200 с JSON-объектом:
 
@@ -371,10 +374,13 @@ X-Invalidate-Token: {invalidate_token}
 |---|---|---|---|---|
 | `enabled` | bool | `false` | Включает модуль | `true` |
 | `service_url` | string | — | Базовый URL permission-сервиса; обязателен при `enabled` | `http://permissions:8080` |
+| `method` | string | `GET` | HTTP-метод запроса к permission-сервису | `POST` |
+| `path` | string | `/api/v1/users/{user_id}/effective-permissions` | Шаблон пути; `{user_id}` заменяется на идентификатор пользователя. Плейсхолдер `{user_id}` обязателен | `/v2/users/{user_id}/permissions` |
+| `api_key_header` | string | `X-API-Key` | Заголовок, в который кладётся `api_key`, если он задан | `Authorization` |
 | `cache_ttl` | duration | `300s` | TTL кеша разрешений по пользователю | `300s` |
 | `header_name` | string | `X-User-Permissions` | Заголовок с разрешениями (через запятую) | `X-User-Permissions` |
 | `invalidate_token` | string | значение `api_key` | Токен для инвалидации кеша; если пуст — равен `api_key` | `"${INVALIDATE_TOKEN}"` |
-| `api_key` | string | `""` | API-ключ сервиса (`X-API-Key`); также секрет для `headers.sign_header` | `"${PERMISSIONS_KEY}"` |
+| `api_key` | string | `""` | API-ключ сервиса (отправляется в `api_key_header`); также секрет для `headers.sign_header` | `"${PERMISSIONS_KEY}"` |
 
 ### Пример конфигурации
 
@@ -390,6 +396,18 @@ permissions:
   header_name: "X-User-Permissions"
   api_key: "${PERMISSIONS_KEY}"
   invalidate_token: "${INVALIDATE_TOKEN}"
+```
+
+Кастомный эндпоинт — другой метод, путь и заголовок ключа:
+
+```yaml
+permissions:
+  enabled: true
+  service_url: "http://permissions:8080"
+  method: "POST"
+  path: "/v2/users/{user_id}/permissions"
+  api_key_header: "Authorization"
+  api_key: "${PERMISSIONS_KEY}"
 ```
 
 ## webhooks
