@@ -41,6 +41,18 @@ docker run --rm -p 9000:80 traefik/whoami
 
 Подойдёт и любой другой HTTP-сервер на порту 9000: шлюз не зависит от типа бэкенда.
 
+## Проверка конфигурации
+
+Перед запуском конфиг можно проверить, не поднимая шлюз:
+
+```bash
+go run ./cmd/ -config config.local.yaml -check
+# config OK: config.local.yaml
+#   targets: 1, routing rules: 1, discovery: false, permissions: false
+```
+
+Флаг `-check` загружает и валидирует конфиг, печатает предупреждения и ошибки и завершается с кодом `0` (валиден) или `1` (ошибка) — удобно для CI и перед деплоем. `-strict` дополнительно считает ошибкой предупреждения о неизвестных ключах. В контейнере: `docker run --rm -v "$PWD/config.local.yaml:/etc/proxy/config.yaml" api-gateway -check`.
+
 ## Запуск локально
 
 ```bash
