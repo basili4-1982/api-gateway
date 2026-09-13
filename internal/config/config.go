@@ -324,6 +324,58 @@ func Load(path string) (*Config, []string, error) {
 		return nil, nil, fmt.Errorf("config references undefined environment variable(s): %s", strings.Join(missing, ", "))
 	}
 
+	cfg, warnings, err := parseConfig(resolved)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Валидация конфигурации
+	if err := cfg.validate(); err != nil {
+		return nil, nil, fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	return cfg, warnings, nil
+}
+
+// LoadLenient загружает конфигурацию «мягко». Отличия от Load:
+//   - отсутствующие или пустые переменные окружения не считаются ошибкой —
+//     соответствующий литерал "${VAR}" остаётся в тексте как есть;
+//   - validate() не вызывается, поэтому конфиг без таргетов всё равно
+//     разбирается.
+//
+// Предупреждения о неизвестных YAML-ключах и значения по умолчанию
+// применяются так же, как у Load. Режим нужен read-only дашборду, который не
+// должен требовать секретные переменные окружения гейтвея.
+func LoadLenient(path string) (*Config, []string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+
+	// Best-effort подстановка: не заданные (или пустые) переменные остаются
+	// литералом "${VAR}". Экранирование "$${VAR}" по-прежнему даёт "${VAR}".
+	resolved := os.Expand(string(data), func(key string) string {
+		if key == "$" {
+			return "$"
+		}
+		val, ok := os.LookupEnv(key)
+		if !ok || val == "" {
+			return "${" + key + "}"
+		}
+		return val
+	})
+
+	cfg, warnings, err := parseConfig(resolved)
+	if err != nil {
+		return nil, nil, err
+	}
+	return cfg, warnings, nil
+}
+
+// parseConfig разбирает YAML, собирает предупреждения о неизвестных ключах и
+// применяет значения по умолчанию. Валидация здесь не выполняется — это
+// ответственность вызывающей стороны (Load).
+func parseConfig(resolved string) (*Config, []string, error) {
 	var root yaml.Node
 	if err := yaml.Unmarshal([]byte(resolved), &root); err != nil {
 		return nil, nil, fmt.Errorf("failed to parse config file: %w", err)
@@ -340,11 +392,6 @@ func Load(path string) (*Config, []string, error) {
 
 	// Устанавливаем значения по умолчанию
 	cfg.setDefaults()
-
-	// Валидация конфигурации
-	if err := cfg.validate(); err != nil {
-		return nil, nil, fmt.Errorf("invalid configuration: %w", err)
-	}
 
 	return &cfg, warnings, nil
 }
