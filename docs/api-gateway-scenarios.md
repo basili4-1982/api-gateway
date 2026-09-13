@@ -131,12 +131,14 @@ permissions:
   invalidate_token: "${INVALIDATE_TOKEN}"
 ```
 
-**Что должен реализовать permission-сервис.** Эндпоинт, который шлюз вызывает при промахе кеша:
+**Что должен реализовать permission-сервис.** Эндпоинт, который шлюз вызывает при промахе кеша. Метод, путь и заголовок ключа настраиваются полями `permissions.method`, `permissions.path` и `permissions.api_key_header`; по умолчанию:
 
 ```
 GET /api/v1/users/{user_id}/effective-permissions
 X-API-Key: ${PERMISSIONS_KEY}     # отправляется, если permissions.api_key задан
 ```
+
+Плейсхолдер `{user_id}` в `permissions.path` обязателен. Если эти поля не заданы, поведение прежнее — существующий permission-сервис менять не нужно.
 
 Ответ — HTTP 200 с JSON-объектом; шлюз использует только поле `permissions`, остальные опциональны:
 
