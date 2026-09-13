@@ -110,9 +110,52 @@ func TestLoadConfigSummaryNoSecrets(t *testing.T) {
 }
 
 func TestLoadConfigSummaryInvalid(t *testing.T) {
-	path := writeTempConfig(t, "targets: []\n")
+	path := writeTempConfig(t, "targets: [\n")
 	if _, err := LoadConfigSummary(path); err == nil {
-		t.Fatal("LoadConfigSummary() error = nil, want error for invalid config")
+		t.Fatal("LoadConfigSummary() error = nil, want error for malformed config")
+	}
+}
+
+func TestLoadConfigSummaryWithoutTargets(t *testing.T) {
+	path := writeTempConfig(t, "targets: []\n")
+
+	c, err := LoadConfigSummary(path)
+	if err != nil {
+		t.Fatalf("LoadConfigSummary() error = %v, want lenient success without targets", err)
+	}
+	if !c.Loaded {
+		t.Error("Loaded = false, want true")
+	}
+	if c.TargetCount != 0 {
+		t.Errorf("TargetCount = %d, want 0", c.TargetCount)
+	}
+}
+
+func TestLoadConfigSummaryMissingEnvStaysLiteral(t *testing.T) {
+	os.Unsetenv("DASHBOARD_MISSING_JWT")
+	path := writeTempConfig(t, `
+server:
+  port: 8080
+jwt:
+  secret_key: "${DASHBOARD_MISSING_JWT}"
+targets:
+  - name: "t1"
+    url: "http://localhost:9001"
+`)
+
+	c, err := LoadConfigSummary(path)
+	if err != nil {
+		t.Fatalf("LoadConfigSummary() must not require the gateway's env vars: %v", err)
+	}
+	if c.Port != 8080 {
+		t.Errorf("Port = %d, want 8080", c.Port)
+	}
+	data, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "DASHBOARD_MISSING_JWT") {
+		t.Errorf("unresolved secret literal leaked into summary: %s", data)
 	}
 }
 
