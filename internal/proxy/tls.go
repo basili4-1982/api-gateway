@@ -3,20 +3,50 @@ package proxy
 import (
 	"fmt"
 	"net/http"
+	"path/filepath"
 
 	"go.uber.org/zap"
+	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
+
+	"github.com/basili4-1982/api-gateway/internal/config"
 )
+
+// letsEncryptStagingDirectory — ACME directory тестового CA Let's Encrypt.
+const letsEncryptStagingDirectory = "https://acme-staging-v02.api.letsencrypt.org/directory"
+
+// buildCertManager собирает autocert.Manager по TLS-конфигу. При staging
+// используется ACME staging directory и отдельный cache-подкаталог, чтобы
+// staging-сертификаты не смешивались с production. tls.directory_url
+// перекрывает выбор CA.
+func buildCertManager(tls *config.TLSConfig) *autocert.Manager {
+	cacheDir := tls.CacheDir
+	if tls.Staging {
+		cacheDir = filepath.Join(cacheDir, "staging")
+	}
+
+	manager := &autocert.Manager{
+		Prompt:     autocert.AcceptTOS,
+		HostPolicy: autocert.HostWhitelist(tls.Domains...),
+		Cache:      autocert.DirCache(cacheDir),
+		Email:      tls.Email,
+	}
+
+	directoryURL := tls.DirectoryURL
+	if directoryURL == "" && tls.Staging {
+		directoryURL = letsEncryptStagingDirectory
+	}
+	if directoryURL != "" {
+		manager.Client = &acme.Client{DirectoryURL: directoryURL}
+	}
+
+	return manager
+}
 
 func (mp *MultiProxy) startTLS() error {
 	tls := mp.config.Load().TLS
 
-	certManager := &autocert.Manager{
-		Prompt:     autocert.AcceptTOS,
-		HostPolicy: autocert.HostWhitelist(tls.Domains...),
-		Cache:      autocert.DirCache(tls.CacheDir),
-		Email:      tls.Email,
-	}
+	certManager := buildCertManager(tls)
 
 	tlsServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", tls.Port),
@@ -44,6 +74,7 @@ func (mp *MultiProxy) startTLS() error {
 		zap.String("email", tls.Email),
 		zap.String("cache_dir", tls.CacheDir),
 		zap.Bool("staging", tls.Staging),
+		zap.String("directory_url", tls.DirectoryURL),
 		zap.Int("targets", len(mp.targets)),
 	)
 
