@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -160,23 +161,30 @@ func metricsEndpointMiddleware(metrics *Metrics, allowedIPs []string) Middleware
 				next.ServeHTTP(w, r)
 				return
 			}
-			if len(allowedIPs) > 0 {
-				clientIP := getClientIP(r)
-				allowed := false
-				for _, ip := range allowedIPs {
-					if clientIP == ip {
-						allowed = true
-						break
-					}
-				}
-				if !allowed {
-					http.Error(w, "Forbidden", http.StatusForbidden)
-					return
-				}
+			if len(allowedIPs) > 0 && !ipAllowed(getClientIP(r), allowedIPs) {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
 			}
 			metrics.Handler().ServeHTTP(w, r)
 		})
 	}
+}
+
+// ipAllowed сообщает, разрешён ли clientIP: точное совпадение или вхождение в
+// один из CIDR-диапазонов (например, 172.30.0.0/24).
+func ipAllowed(clientIP string, allowed []string) bool {
+	ip := net.ParseIP(clientIP)
+	for _, a := range allowed {
+		if a == clientIP {
+			return true
+		}
+		if ip != nil {
+			if _, cidr, err := net.ParseCIDR(a); err == nil && cidr.Contains(ip) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ──────── Global rate limiter ────────
