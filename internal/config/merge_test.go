@@ -95,8 +95,19 @@ func TestMerge_DefaultsDiscoveredWeight(t *testing.T) {
 		[]TargetConfig{{Name: "svc", URL: "http://svc:9000"}},
 		nil,
 	)
-	if got.Targets[1].Weight != 1 {
-		t.Errorf("discovered target weight = %d, want default 1", got.Targets[1].Weight)
+	if got.Targets[1].EffectiveWeight() != 1 {
+		t.Errorf("discovered target weight = %d, want default 1", got.Targets[1].EffectiveWeight())
+	}
+}
+
+func TestMerge_PreservesExplicitZeroWeight(t *testing.T) {
+	zero := 0
+	got := Merge(baseCfg(),
+		[]TargetConfig{{Name: "svc", URL: "http://svc:9000", Weight: &zero}},
+		nil,
+	)
+	if got.Targets[1].EffectiveWeight() != 0 {
+		t.Errorf("explicit zero weight must survive Merge, got %d", got.Targets[1].EffectiveWeight())
 	}
 }
 

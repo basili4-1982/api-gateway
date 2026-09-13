@@ -34,10 +34,12 @@ func Merge(base *Config, targets []TargetConfig, rules []RoutingRule) *Config {
 	}
 
 	// Дефолт веса применяется и к обнаруженным таргетам: они минуют
-	// Config.setDefaults, а нулевой вес исключал бы их из пула.
+	// Config.setDefaults. nil (label не задан) → 1; явный 0 или отрицательное
+	// значение сохраняется и исключает таргет из пула.
 	for i := range merged.Targets {
-		if merged.Targets[i].Weight == 0 {
-			merged.Targets[i].Weight = 1
+		if merged.Targets[i].Weight == nil {
+			weight := 1
+			merged.Targets[i].Weight = &weight
 		}
 	}
 
