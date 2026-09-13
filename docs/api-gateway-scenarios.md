@@ -131,9 +131,30 @@ permissions:
   invalidate_token: "${INVALIDATE_TOKEN}"
 ```
 
-**Результат.** Бэкенд получает заголовок `X-User-Permissions` со списком разрешений через запятую. Ответы кешируются по `user_id` на `cache_ttl`. Инвалидация — `POST /_cache/permissions/invalidate` с `X-Invalidate-Token` (опционально `?user_id=…`).
+**Что должен реализовать permission-сервис.** Эндпоинт, который шлюз вызывает при промахе кеша:
 
-**Оговорки.** Модуль требует claim `id`, приводимый к целому. Если разрешений нет, заголовок не выставляется. Эндпоинт инвалидации находится за Basic Auth, если он включён, — добавьте путь в `skip_paths` или шлите токен.
+```
+GET /api/v1/users/{user_id}/effective-permissions
+X-API-Key: ${PERMISSIONS_KEY}     # отправляется, если permissions.api_key задан
+```
+
+Ответ — HTTP 200 с JSON-объектом; шлюз использует только поле `permissions`, остальные опциональны:
+
+```json
+{
+  "user_id": 42,
+  "permissions": ["orders:read", "orders:write", "reports:view"],
+  "inherited_from_role": ["orders:read", "reports:view"],
+  "direct_allowed": ["orders:write"],
+  "direct_denied": ["admin:all"]
+}
+```
+
+Любой не-200 (401/403/404/5xx) или невалидный JSON считается ошибкой: заголовок не выставится, но запрос до бэкенда дойдёт.
+
+**Результат.** Бэкенд получает `X-User-Permissions` со списком разрешений через запятую, но только если список непуст. Ответы кешируются по `user_id` на `cache_ttl`. Инвалидация — `POST /_cache/permissions/invalidate` с `X-Invalidate-Token` (опционально `?user_id=…`).
+
+**Оговорки.** Модуль требует claim `id` в `jwt.claim_mappings`, приводимый к целому (JSON-число, `int` или числовая строка); иначе заголовок не выставляется, а запрос идёт дальше без 401. При ошибке сервиса заголовок тоже не выставляется. Эндпоинт инвалидации обрабатывается до Basic Auth, поэтому `basic_auth` его не защищает — доступ ограничен только `X-Invalidate-Token`. После смены прав пользователя вызывайте инвалидацию, иначе до истечения `cache_ttl` будет отдаваться устаревший набор.
 
 ## 6. Рейт-лимитинг на маршрут и глобальный
 
