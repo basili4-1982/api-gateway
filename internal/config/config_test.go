@@ -455,6 +455,91 @@ logging:
 	}
 }
 
+func TestLoad_RejectsPooledRulesWithDifferentPolicy(t *testing.T) {
+	const header = `
+targets:
+  - name: a
+    url: http://a:9000
+  - name: b
+    url: http://b:9000
+routing:
+  rules:
+`
+	cases := []struct {
+		name string
+		ruleA string
+		ruleB string
+	}{
+		{
+			name:  "auth differs",
+			ruleA: "    - {host: h, path_prefix: /api, target_name: a, auth: {required: true}}\n",
+			ruleB: "    - {host: h, path_prefix: /api, target_name: b, auth: {required: false}}\n",
+		},
+		{
+			name:  "strip_path differs",
+			ruleA: "    - {host: h, path_prefix: /api, target_name: a}\n",
+			ruleB: "    - {host: h, path_prefix: /api, target_name: b, strip_path: true}\n",
+		},
+		{
+			name:  "rate_limit differs",
+			ruleA: "    - {host: h, path_prefix: /api, target_name: a}\n",
+			ruleB: "    - {host: h, path_prefix: /api, target_name: b, rate_limit: {requests_per_second: 10, burst: 20}}\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeTempConfig(t, header+tc.ruleA+tc.ruleB)
+			_, _, err := Load(path)
+			if err == nil {
+				t.Fatal("expected error for pooled rules with differing policy")
+			}
+			if !strings.Contains(err.Error(), "pool") {
+				t.Errorf("error should explain the shared pool conflict, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoad_AcceptsPooledRulesWithIdenticalPolicy(t *testing.T) {
+	yaml := `
+targets:
+  - name: a
+    url: http://a:9000
+  - name: b
+    url: http://b:9000
+routing:
+  rules:
+    - {host: h, path_prefix: /api, target_name: a, strip_path: true, auth: {required: true}, rate_limit: {requests_per_second: 10, burst: 20}}
+    - {host: h, path_prefix: /api, target_name: b, strip_path: true, auth: {required: true}, rate_limit: {requests_per_second: 10, burst: 20}}
+`
+	path := writeTempConfig(t, yaml)
+	cfg, _, err := Load(path)
+	if err != nil {
+		t.Fatalf("pooled rules with identical policy must load: %v", err)
+	}
+	if len(cfg.Routing.Rules) != 2 {
+		t.Fatalf("both pooled rules must survive, got %d", len(cfg.Routing.Rules))
+	}
+}
+
+func TestLoad_AllowsSameRouteDifferentMethods(t *testing.T) {
+	yaml := `
+targets:
+  - name: a
+    url: http://a:9000
+  - name: b
+    url: http://b:9000
+routing:
+  rules:
+    - {host: h, path_prefix: /api, target_name: a, methods: [GET], auth: {required: true}}
+    - {host: h, path_prefix: /api, target_name: b, methods: [POST]}
+`
+	path := writeTempConfig(t, yaml)
+	if _, _, err := Load(path); err != nil {
+		t.Fatalf("rules with different methods are different pools and must load: %v", err)
+	}
+}
+
 func TestConfig_MaxRequestBodySizeDefault(t *testing.T) {
 	yaml := `
 targets:
