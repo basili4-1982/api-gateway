@@ -736,3 +736,114 @@ func TestProxyHandler_AllUnhealthyReturns503(t *testing.T) {
 		t.Fatalf("status = %d, want 503", rec.Code)
 	}
 }
+
+func TestCheckRoles(t *testing.T) {
+	tests := []struct {
+		name  string
+		roles interface{}
+		omit  bool
+		anyOf []string
+		allOf []string
+		want  bool
+	}{
+		{name: "any-of single match", roles: []interface{}{"admin", "user"}, anyOf: []string{"admin"}, want: true},
+		{name: "any-of second listed matches", roles: []interface{}{"user"}, anyOf: []string{"admin", "user"}, want: true},
+		{name: "any-of no match", roles: []interface{}{"user"}, anyOf: []string{"admin"}, want: false},
+		{name: "all-of all present", roles: []interface{}{"admin", "mfa"}, allOf: []string{"admin", "mfa"}, want: true},
+		{name: "all-of one missing", roles: []interface{}{"admin"}, allOf: []string{"admin", "mfa"}, want: false},
+		{name: "combined satisfied", roles: []interface{}{"admin", "mfa"}, anyOf: []string{"admin", "support"}, allOf: []string{"mfa"}, want: true},
+		{name: "combined any-of unsatisfied", roles: []interface{}{"mfa"}, anyOf: []string{"admin"}, allOf: []string{"mfa"}, want: false},
+		{name: "combined all-of unsatisfied", roles: []interface{}{"admin"}, anyOf: []string{"admin"}, allOf: []string{"mfa"}, want: false},
+		{name: "missing claim fails", omit: true, anyOf: []string{"admin"}, want: false},
+		{name: "malformed claim number fails", roles: float64(42), anyOf: []string{"admin"}, want: false},
+		{name: "malformed claim object fails", roles: map[string]interface{}{"admin": true}, anyOf: []string{"admin"}, want: false},
+		{name: "malformed claim array with non-string fails", roles: []interface{}{"admin", float64(7)}, anyOf: []string{"admin"}, want: false},
+		{name: "single string claim matches", roles: "admin", anyOf: []string{"admin"}, want: true},
+		{name: "single string claim does not match", roles: "user", anyOf: []string{"admin"}, want: false},
+		{name: "no roles configured allows", omit: true, want: true},
+		{name: "no roles configured ignores malformed claim", roles: float64(42), want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			claims := jwt.MapClaims{}
+			if !tt.omit {
+				claims["roles"] = tt.roles
+			}
+			mp := &MultiProxy{}
+			err := mp.checkRoles(claims, tt.anyOf, tt.allOf)
+			if tt.want && err != nil {
+				t.Fatalf("expected allowed, got error: %v", err)
+			}
+			if !tt.want && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+		})
+	}
+}
+
+func TestModifyRequest_RoleChecks(t *testing.T) {
+	tests := []struct {
+		name  string
+		roles interface{}
+		omit  bool
+		auth  *config.AuthRule
+		want  bool
+	}{
+		{
+			name:  "any-of allows matching role",
+			roles: []interface{}{"support"},
+			auth:  &config.AuthRule{Required: true, Roles: []string{"admin", "support"}},
+			want:  true,
+		},
+		{
+			name:  "any-of rejects no matching role",
+			roles: []interface{}{"user"},
+			auth:  &config.AuthRule{Required: true, Roles: []string{"admin"}},
+			want:  false,
+		},
+		{
+			name:  "all-of rejects missing role",
+			roles: []interface{}{"admin"},
+			auth:  &config.AuthRule{Required: true, RolesAll: []string{"admin", "mfa"}},
+			want:  false,
+		},
+		{
+			name: "missing claim rejected on role-protected route",
+			omit: true,
+			auth: &config.AuthRule{Required: true, Roles: []string{"admin"}},
+			want: false,
+		},
+		{
+			name: "no roles configured allows",
+			omit: true,
+			auth: &config.AuthRule{Required: true},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mp := newTestMultiProxy(t, true)
+			claims := jwt.MapClaims{
+				"sub": "123",
+				"exp": float64(1893456000),
+			}
+			if !tt.omit {
+				claims["roles"] = tt.roles
+			}
+			token := signTestToken(claims, "test-secret")
+			r := httptest.NewRequest("GET", "/api/anything", nil)
+			r.Header.Set("Authorization", "Bearer "+token)
+			rule := &config.RoutingRule{PathPrefix: "/api", TargetName: "x", Auth: tt.auth}
+
+			err := mp.modifyRequest(r, nil, rule)
+			if tt.want && err != nil {
+				t.Fatalf("expected allowed, got error: %v", err)
+			}
+			if !tt.want && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+		})
+	}
+}

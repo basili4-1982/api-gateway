@@ -304,6 +304,11 @@ func TestParseTarget_RouterFields(t *testing.T) {
 			want:  config.RoutingRule{Host: "x", PathPrefix: "/", Auth: &config.AuthRule{Roles: []string{"admin", "user"}}},
 		},
 		{
+			name:  "auth roles_all split",
+			extra: map[string]string{"gateway.auth.roles_all": "mfa, verified"},
+			want:  config.RoutingRule{Host: "x", PathPrefix: "/", Auth: &config.AuthRule{RolesAll: []string{"mfa", "verified"}}},
+		},
+		{
 			name:  "auth strip_token false",
 			extra: map[string]string{"gateway.auth.strip_token": "false"},
 			want:  config.RoutingRule{Host: "x", PathPrefix: "/", Auth: &config.AuthRule{StripToken: &stripFalse}},
@@ -401,6 +406,7 @@ func TestParseRouters_NamedRouters(t *testing.T) {
 			"gateway.router.auth.path_prefix":          "/api/auth",
 			"gateway.router.auth.auth.required":        "true",
 			"gateway.router.auth.auth.roles":           "user,admin",
+			"gateway.router.auth.auth.roles_all":       "mfa",
 			"gateway.router.sessions.path_prefix":      "/api/admin/sessions",
 			"gateway.router.sessions.strip_path":       "true",
 			"gateway.router.sessions.methods":          "GET,POST",
@@ -423,6 +429,9 @@ func TestParseRouters_NamedRouters(t *testing.T) {
 	}
 	if len(auth.Auth.Roles) != 2 || auth.Auth.Roles[0] != "user" {
 		t.Errorf("auth roles: got %v", auth.Auth.Roles)
+	}
+	if len(auth.Auth.RolesAll) != 1 || auth.Auth.RolesAll[0] != "mfa" {
+		t.Errorf("auth roles_all: got %v", auth.Auth.RolesAll)
 	}
 
 	sessions := byPrefix["/api/admin/sessions"]

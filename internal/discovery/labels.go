@@ -187,6 +187,7 @@ var routerFields = map[string]struct{}{
 	"strip_path":       {},
 	"auth.required":    {},
 	"auth.roles":       {},
+	"auth.roles_all":   {},
 	"auth.strip_token": {},
 	"rate_limit.rps":   {},
 	"rate_limit.burst": {},
@@ -273,6 +274,10 @@ func buildRule(f map[string]string) config.RoutingRule {
 	if v, ok := f["auth.roles"]; ok {
 		rule.Auth = ensureAuth(rule.Auth)
 		rule.Auth.Roles = splitCSV(v)
+	}
+	if v, ok := f["auth.roles_all"]; ok {
+		rule.Auth = ensureAuth(rule.Auth)
+		rule.Auth.RolesAll = splitCSV(v)
 	}
 	if v, ok := f["auth.strip_token"]; ok {
 		strip := parseBool(v)
