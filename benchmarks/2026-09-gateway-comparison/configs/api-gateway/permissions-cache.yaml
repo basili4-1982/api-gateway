@@ -1,0 +1,32 @@
+# api-gateway permission-service with TTL cache (scenario: feature-cost/api-gateway/permission-cache).
+# The external permission responder is reached once per distinct token, then served from
+# the 300s TTL cache. "perms" is the Compose service built from helpers/auth.
+# "benchkey" is a non-secret, benchmark-only API key.
+server:
+  port: 8080
+application:
+  env: "prod"
+  max_idle_conns_per_host: 1000
+jwt:
+  required: true
+  secret_key: "benchsecret"
+  algorithm: "HS256"
+  validate_exp: true
+  claim_mappings: ["id", "roles"]
+permissions:
+  enabled: true
+  service_url: "http://perms:9000"
+  cache_ttl: 300s
+  api_key: "benchkey"
+  header_name: "X-User-Permissions"
+targets:
+  - name: "backend"
+    url: "http://backend:80"
+    timeout: 30s
+routing:
+  rules:
+    - path_prefix: "/"
+      target_name: "backend"
+logging:
+  level: "error"
+  access_log: false

@@ -1,0 +1,27 @@
+# api-gateway RBAC scenario (scenario: feature-cost/api-gateway/rbac).
+# Adds role extraction from JWT claims and an admin-only check on the route.
+# max_idle_conns_per_host=1000 avoids client connection-pool starvation at c300.
+server:
+  port: 8080
+application:
+  env: "prod"
+  max_idle_conns_per_host: 1000
+jwt:
+  required: true
+  secret_key: "benchsecret"
+  algorithm: "HS256"
+  validate_exp: true
+targets:
+  - name: "backend"
+    url: "http://backend:80"
+    timeout: 30s
+routing:
+  rules:
+    - path_prefix: "/"
+      target_name: "backend"
+      auth:
+        required: true
+        roles: ["admin"]
+logging:
+  level: "error"
+  access_log: false

@@ -1,0 +1,31 @@
+# api-gateway direct HTTP webhook (scenario: feature-cost/api-gateway/webhook-http-direct).
+# Non-batched delivery: every request fires its own async POST to the sink, which is why
+# this mode is far more expensive than batching. trigger=on_response matches the batched
+# and NATS scenarios so the comparison isolates delivery mode, not trigger timing.
+# Source artifact: gwbench config-webhook.yaml (config-webhook-req.yaml was the on_request
+# alternative; on_response keeps direct vs batched apples-to-apples).
+server:
+  port: 8080
+application:
+  env: "prod"
+  max_idle_conns_per_host: 1000
+jwt:
+  required: false
+  secret_key: "benchsecret"
+webhooks:
+  - name: "audit"
+    transport: "webhook"
+    webhook_url: "http://sink:9000/"
+    trigger: "on_response"
+    async: true
+targets:
+  - name: "backend"
+    url: "http://backend:80"
+    timeout: 30s
+routing:
+  rules:
+    - path_prefix: "/"
+      target_name: "backend"
+logging:
+  level: "error"
+  access_log: false
