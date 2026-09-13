@@ -246,7 +246,16 @@ headers:
 | `auth` | object | нет | Аутентификация маршрута | см. ниже |
 | `rate_limit` | object | нет | Лимит маршрута | см. ниже |
 
-`auth`: `required` (bool, по умолчанию наследует глобальный `jwt.required`), `roles` ([]string, должны присутствовать все), `strip_token` (bool, наследует `headers.strip_authorization`).
+`auth`: `required` (bool, по умолчанию наследует глобальный `jwt.required`), `roles` ([]string, достаточно **любой** из перечисленных ролей), `roles_all` ([]string, должны присутствовать **все** перечисленные роли), `strip_token` (bool, наследует `headers.strip_authorization`).
+
+`roles` и `roles_all` читают claim `roles` токена (строка или массив строк). Если заданы оба списка, роль должна пройти оба условия: `(любая из roles) И (все из roles_all)`. Если claim `roles` отсутствует или его тип не строка и не массив строк, маршрут с требованиями ролей отвечает 401.
+
+```yaml
+auth:
+  required: true
+  roles: ["admin", "support"]   # достаточно любой из двух
+  roles_all: ["staff", "mfa"]   # и при этом обязательны обе
+```
 
 `rate_limit`: `requests_per_second` (float, token bucket), `burst` (int). `global_limit` имеет те же поля, но применяется ко всем запросам процесса, а не на IP.
 
@@ -343,7 +352,7 @@ routing:
 | `gateway.health` | нет | Health-путь или полный URL | — |
 | `gateway.weight` | нет | Вес таргета (`0`/отрицательный исключает) | `1` |
 
-Роутеры задаются коротко (`gateway.<field>` → роутер `default`) или именованно (`gateway.router.<id>.<field>`): `host`, `path_prefix`, `methods`, `strip_path`, `auth.required`, `auth.roles`, `auth.strip_token`, `rate_limit.rps`, `rate_limit.burst`. Роутер без `host` и `path_prefix` пропускается.
+Роутеры задаются коротко (`gateway.<field>` → роутер `default`) или именованно (`gateway.router.<id>.<field>`): `host`, `path_prefix`, `methods`, `strip_path`, `auth.required`, `auth.roles`, `auth.roles_all`, `auth.strip_token`, `rate_limit.rps`, `rate_limit.burst`. Роутер без `host` и `path_prefix` пропускается.
 
 ## Поведение и оговорки
 
