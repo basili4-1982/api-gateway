@@ -11,6 +11,9 @@ config.sarnas.yaml
 /dist/
 *.dll
 docs/obsidian/
+# Superpowers design docs and plans (local workflow artifacts)
+docs/superpowers/
+.superpowers/
 .DS_Store
 *.dylib
 .env
