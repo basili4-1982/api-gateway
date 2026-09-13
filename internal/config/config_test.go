@@ -78,6 +78,28 @@ targets:
 	}
 }
 
+func TestLoad_IgnoresRemovedForwardHeaders(t *testing.T) {
+	// headers.forward_headers удалён: заголовки проксируются всегда. Старый
+	// конфиг с этим ключом должен по-прежнему загружаться (ключ игнорируется
+	// как неизвестный), а не падать.
+	yaml := `
+targets:
+  - name: "api"
+    url: "http://api:9001"
+headers:
+  forward_headers: true
+  strip_authorization: true
+`
+	path := writeTempConfig(t, yaml)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("config with removed headers.forward_headers must still load: %v", err)
+	}
+	if !cfg.Headers.StripAuthorization {
+		t.Error("sibling headers settings must still be parsed")
+	}
+}
+
 func TestLoad_RejectsMalformedTargetURL(t *testing.T) {
 	yaml := `
 targets:
