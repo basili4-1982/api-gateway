@@ -26,9 +26,12 @@ type ConfigSummary struct {
 	Warnings           []string     `json:"warnings"`
 }
 
-// LoadConfigSummary reads and summarizes the gateway config at path.
+// LoadConfigSummary reads and summarizes the gateway config at path. It uses
+// the lenient loader so the dashboard does not need the gateway's secret
+// environment variables: unresolved ${VAR} references stay literal and a
+// config without targets still parses.
 func LoadConfigSummary(path string) (*ConfigSummary, error) {
-	cfg, warnings, err := config.Load(path)
+	cfg, warnings, err := config.LoadLenient(path)
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
@@ -101,14 +104,18 @@ func viewRules(rules []config.RoutingRule) []RuleView {
 	return out
 }
 
-// redactURL strips embedded userinfo (credentials) from a URL. Values that are
-// empty or not parseable as URLs are returned unchanged.
+// redactURL strips embedded userinfo (credentials) from a URL. URLs that fail
+// to parse fall back to a best-effort regex strip so credentials are never
+// rendered even for malformed targets. Empty values are returned unchanged.
 func redactURL(raw string) string {
 	if raw == "" {
 		return ""
 	}
 	u, err := url.Parse(raw)
-	if err != nil || u.User == nil {
+	if err != nil {
+		return redactCredentials(raw)
+	}
+	if u.User == nil {
 		return raw
 	}
 	u.User = nil
