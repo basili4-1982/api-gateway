@@ -172,6 +172,34 @@ func TestStatusEndpointNoSecrets(t *testing.T) {
 	}
 }
 
+func TestStatusErrorsRedactCredentials(t *testing.T) {
+	cfgPath := writeTempConfig(t, `
+targets:
+  - name: "t1"
+    url: "http://user:SUPER_SECRET_PASS@exa mple.com"
+`)
+	s := NewServer(ServerConfig{
+		ConfigPath: cfgPath,
+		MetricsURL: "http://user:SUPER_SECRET_PASS@exa mple.com/metrics",
+	})
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if body := rec.Body.String(); strings.Contains(body, "SUPER_SECRET_PASS") {
+		t.Fatalf("response leaks credentials: %s", body)
+	}
+	var status Status
+	if err := json.Unmarshal(rec.Body.Bytes(), &status); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(status.Errors) != 2 {
+		t.Fatalf("len(Errors) = %d, want 2: %v", len(status.Errors), status.Errors)
+	}
+}
+
 func TestMetricsPanel(t *testing.T) {
 	metricsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(sampleMetrics))

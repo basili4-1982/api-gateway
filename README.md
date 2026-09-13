@@ -296,13 +296,41 @@ make dashboard-run \
 
 Секреты (`jwt.secret_key`, `basic_auth.password`, `permissions.api_key`,
 `permissions.invalidate_token`) никогда не отображаются; URL с userinfo
-редактируются. Метрики видны, только если у гейтвея включён
-`application.metrics_enabled`.
+редактируются. Учётные данные из URL не попадают и в текст ошибок панели.
+
+### Панель метрик
+
+Панель метрик работает, только если у гейтвея включён
+`application.metrics_enabled: true` и `-metrics-url` дашборда указывает на
+доступный `/metrics`. Если `metrics_enabled` выключен, `/metrics` не отвечает,
+и панель показывает ошибку.
+
+Если у гейтвея включён глобальный `basic_auth`, он защищает и `/metrics`.
+Тогда либо добавьте `/metrics` в `basic_auth.skip_paths`, либо разрешите IP
+дашборда в `application.metrics_allowed_ips` (можно и то, и другое). Иначе
+запрос дашборда получит `401`, и панель покажет ошибку.
+
+```yaml
+application:
+  metrics_enabled: true
+  metrics_allowed_ips: ["10.0.0.5"]   # IP дашборда
+basic_auth:
+  enabled: true
+  username: admin
+  password: ${GATEWAY_BASIC_AUTH_PASSWORD}
+  skip_paths: ["/health", "/metrics"] # либо пропуск Basic Auth для /metrics
+```
 
 По умолчанию дашборд слушает loopback. В контейнере задайте `-listen :8081` и
 ограничьте сетевой доступ либо включите `-basic-auth`.
 
 ### Docker Compose
+
+Дашборд читает тот же конфиг гейтвея через `config.Load`, а тот раскрывает
+`${VAR}` и **падает, если переменная не задана или пуста**. Поэтому у процесса
+дашборда должны быть те же переменные окружения, что у гейтвея. Если переменные
+передавать нежелательно, смонтируйте конфиг без `${VAR}` — с уже подставленными
+значениями.
 
 ```yaml
 services:
@@ -316,6 +344,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dashboard
+    # config.Load раскрывает ${VAR}: передайте те же переменные, что и гейтвею,
+    # либо смонтируйте конфиг без ${VAR}. Иначе панель конфига покажет ошибку
+    # "config references undefined environment variable(s): ...".
+    environment:
+      - GATEWAY_BASIC_AUTH_PASSWORD=${GATEWAY_BASIC_AUTH_PASSWORD}
     command:
       - -config=/etc/proxy/config.yaml
       - -discovery-state=/var/lib/api-gateway/discovery-state.json
