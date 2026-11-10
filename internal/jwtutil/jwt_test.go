@@ -149,3 +149,13 @@ func TestWithoutExpValidation(t *testing.T) {
 		t.Fatalf("expected no exp validation, got %v", err)
 	}
 }
+
+// TestNewJWTValidator_ShortAlgorithm: короткий/пустой algorithm — ошибка,
+// а не паника на algorithm[:2].
+func TestNewJWTValidator_ShortAlgorithm(t *testing.T) {
+	for _, alg := range []string{"", "H"} {
+		if _, err := NewJWTValidator("secret", alg, false, false, "", false, "", ""); err == nil {
+			t.Fatalf("algorithm %q: expected error, got nil", alg)
+		}
+	}
+}
