@@ -125,6 +125,18 @@ func (m *Manager) Resolve(ctx context.Context, token string) (*User, error) {
 			}
 		}
 
+		// Email-путь привязывает токен к аккаунту по адресу, поэтому доверяет
+		// только подтверждённым адресам: у IdP, где email можно задать без
+		// верификации, явный email_verified=false — отказ. Claim отсутствует
+		// или не bool — поведение прежнее (решение остаётся у политики IdP).
+		if v, ok := claims["email_verified"]; ok {
+			if verified, isBool := v.(bool); isBool && !verified {
+				m.logger.Info("identity: email claim is explicitly unverified",
+					zap.String("provider", p.name))
+				continue
+			}
+		}
+
 		email, _ := claims[p.emailClaim].(string)
 		email = strings.TrimSpace(email)
 		if email == "" {
