@@ -355,6 +355,11 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 			if r.Header.Get("X-Forwarded-Host") == "" {
 				r.Header.Set("X-Forwarded-Host", r.Host)
 			}
+		} else {
+			// Director доверяет internalHostHeader безусловно: клиентский
+			// заголовок с тем же именем подменил бы Host, который увидит
+			// бэкенд. Выставляет его только шлюз и только для preserve_host.
+			r.Header.Del(internalHostHeader)
 		}
 
 		// Быстрый отказ по заявленному размеру: обрезать тело молча нельзя

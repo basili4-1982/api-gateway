@@ -515,7 +515,9 @@ const internalPathHeader = "X-Gateway-Internal-Path"
 
 // internalHostHeader переносит исходный Host в Director для маршрутов с
 // preserve_host: бэкенд должен видеть публичный хост, а не адрес контейнера
-// (WebDAV сверяет с ним абсолютный Destination в MOVE/COPY).
+// (WebDAV сверяет с ним абсолютный Destination в MOVE/COPY). На маршрутах
+// без preserve_host proxyHandler удаляет клиентское значение заголовка:
+// Director доверяет ему безусловно, поэтому выставлять его вправе только шлюз.
 const internalHostHeader = "X-Gateway-Internal-Host"
 
 // proxyBufferPool переиспользует 32KB буферы для копирования тела ответа
