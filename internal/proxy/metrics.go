@@ -94,18 +94,20 @@ func (m *Metrics) IncRequests(method, path, status string) {
 	if !m.enabled {
 		return
 	}
-	key := method + ":" + path + ":" + status
-	m.requestsTotal.Add(key, 1)
-	m.promRequests.WithLabelValues(method, routeLabel(path), status).Inc()
+	// Ключ — только нормализованный префикс: сырой путь даёт неограниченную
+	// кардинальность (интернет-сканирование 404 раздувает мапы бесконечно).
+	route := routeLabel(path)
+	m.requestsTotal.Add(method+":"+route+":"+status, 1)
+	m.promRequests.WithLabelValues(method, route, status).Inc()
 }
 
 func (m *Metrics) ObserveDuration(method, path, status string, d time.Duration) {
 	if !m.enabled {
 		return
 	}
-	key := method + ":" + path
-	m.requestDuration.Add(key, d.Milliseconds())
-	m.promDuration.WithLabelValues(method, routeLabel(path), status).Observe(d.Seconds())
+	route := routeLabel(path)
+	m.requestDuration.Add(method+":"+route, d.Milliseconds())
+	m.promDuration.WithLabelValues(method, route, status).Observe(d.Seconds())
 }
 
 // routeLabel снижает кардинальность: /api/blog/posts → /api/blog,
