@@ -21,6 +21,7 @@ type Metrics struct {
 	requestsTotal    *expvar.Map
 	requestDuration  *expvar.Map
 	rateLimitDenials *expvar.Int
+	webhookDrops     *expvar.Map
 	targetUp         *expvar.Map
 	targetRestUntil  *expvar.Map
 	targetRestReason *expvar.Map
@@ -32,6 +33,7 @@ type Metrics struct {
 	promDuration        *prometheus.HistogramVec
 	promActive          prometheus.Gauge
 	promDenials         prometheus.Counter
+	promWebhookDrops    *prometheus.CounterVec
 	promTargetUp        *prometheus.GaugeVec
 	promTargetRestUntil *prometheus.GaugeVec
 	promHandler         http.Handler
@@ -45,6 +47,7 @@ func NewMetrics(enabled bool) *Metrics {
 	m.requestsTotal = expvar.NewMap("gateway_requests_total")
 	m.requestDuration = expvar.NewMap("gateway_request_duration_ms")
 	m.rateLimitDenials = expvar.NewInt("gateway_rate_limit_denials_total")
+	m.webhookDrops = expvar.NewMap("gateway_webhook_events_dropped_total")
 	m.targetUp = expvar.NewMap("gateway_target_up")
 	m.targetRestUntil = expvar.NewMap("gateway_target_rest_until")
 	m.targetRestReason = expvar.NewMap("gateway_target_rest_reason")
@@ -70,6 +73,10 @@ func NewMetrics(enabled bool) *Metrics {
 		Name: "gateway_rate_limit_denials_total",
 		Help: "Requests rejected by rate limiting.",
 	})
+	m.promWebhookDrops = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "gateway_webhook_events_dropped_total",
+		Help: "Audit events dropped because the webhook queue was full or delivery failed.",
+	}, []string{"webhook"})
 	m.promTargetUp = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "gateway_target_up",
 		Help: "Target health (1 = up, 0 = down).",
@@ -78,7 +85,7 @@ func NewMetrics(enabled bool) *Metrics {
 		Name: "gateway_target_rest_until_seconds",
 		Help: "Unix timestamp when the target returns to the pool after a 429/503 rest; a past value means the target is not resting.",
 	}, []string{"target"})
-	m.registry.MustRegister(m.promRequests, m.promDuration, m.promActive, m.promDenials, m.promTargetUp, m.promTargetRestUntil)
+	m.registry.MustRegister(m.promRequests, m.promDuration, m.promActive, m.promDenials, m.promWebhookDrops, m.promTargetUp, m.promTargetRestUntil)
 	m.promHandler = promhttp.HandlerFor(m.registry, promhttp.HandlerOpts{})
 	return m
 }
@@ -121,6 +128,17 @@ func (m *Metrics) IncRateLimitDenial() {
 	}
 	m.rateLimitDenials.Add(1)
 	m.promDenials.Inc()
+}
+
+// IncWebhookDrops считает события аудита, отброшенные из-за переполненной
+// очереди вебхука или неудачной доставки. Лейбл — имя вебхука из конфига,
+// кардинальность ограничена конфигурацией.
+func (m *Metrics) IncWebhookDrops(webhook string, n int64) {
+	if !m.enabled {
+		return
+	}
+	m.webhookDrops.Add(webhook, n)
+	m.promWebhookDrops.WithLabelValues(webhook).Add(float64(n))
 }
 
 func (m *Metrics) SetTargetUp(name string, up bool) {

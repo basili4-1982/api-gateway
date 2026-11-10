@@ -42,18 +42,20 @@ type Publisher struct {
 	nc             *nats.Conn
 	webhooks       []config.WebhookConfig
 	log            *zap.Logger
+	metrics        *Metrics
 	client         *http.Client
 	batchers       map[string]*webhookBatcher
 	trustedProxies []*net.IPNet
 }
 
-func NewPublisher(cfg *config.Config, log *zap.Logger) (*Publisher, error) {
+func NewPublisher(cfg *config.Config, log *zap.Logger, metrics *Metrics) (*Publisher, error) {
 	trustedProxies, err := config.ParseTrustedProxies(cfg.Server.TrustedProxies)
 	if err != nil {
 		return nil, fmt.Errorf("server.trusted_proxies: %w", err)
 	}
 	p := &Publisher{
 		log:            log,
+		metrics:        metrics,
 		webhooks:       cfg.Webhooks,
 		batchers:       make(map[string]*webhookBatcher),
 		trustedProxies: trustedProxies,
@@ -70,7 +72,7 @@ func NewPublisher(cfg *config.Config, log *zap.Logger) (*Publisher, error) {
 	// Батчинг HTTP-вебхуков: события копятся и уходят одним POST.
 	for _, wh := range cfg.Webhooks {
 		if wh.Transport == config.TransportWebhook && wh.BatchSize > 1 {
-			p.batchers[wh.Name] = newWebhookBatcher(wh, p.client, log)
+			p.batchers[wh.Name] = newWebhookBatcher(wh, p.client, log, metrics)
 			log.Info("webhook batching enabled",
 				zap.String("webhook", wh.Name),
 				zap.Int("batch_size", wh.BatchSize),

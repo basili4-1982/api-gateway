@@ -316,7 +316,7 @@ func NewMultiProxy(cfg *config.Config, logger *zap.Logger) (*MultiProxy, error) 
 	}
 
 	if len(cfg.Webhooks) > 0 {
-		publisher, err := NewPublisher(cfg, logger)
+		publisher, err := NewPublisher(cfg, logger, mp.metrics)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create publisher: %w", err)
 		}
