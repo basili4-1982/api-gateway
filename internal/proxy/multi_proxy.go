@@ -1067,17 +1067,6 @@ func (mp *MultiProxy) proxyRequest(w http.ResponseWriter, r *http.Request, targe
 	r.Header.Del(internalPathHeader)
 }
 
-// Обработчик OPTIONS запросов
-func (mp *MultiProxy) handlePreflight(w http.ResponseWriter, r *http.Request) {
-	mp.setCORSHeaders(w.Header(), r)
-	w.WriteHeader(http.StatusOK)
-
-	mp.logger.Debug("Handled preflight request",
-		zap.String("origin", r.Header.Get("Origin")),
-		zap.String("method", r.Header.Get("Access-Control-Request-Method")),
-	)
-}
-
 // ServeHTTP реализует http.Handler — делегирует в middleware цепочку
 func (mp *MultiProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mp.handler.ServeHTTP(w, r)
