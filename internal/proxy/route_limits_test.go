@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -99,6 +100,40 @@ func TestRoutePreserveHostAndStreamBody(t *testing.T) {
 		t.Fatalf("upstream saw %q", got)
 	}
 	<-f.bodyLen
+}
+
+// TestInternalHostHeaderNotClientControlled: X-Gateway-Internal-Host —
+// внутренний канал до Director. Клиентский заголовок с тем же именем не
+// должен влиять на Host, который увидит бэкенд: на обычном маршруте он
+// удаляется, на preserve_host — перезаписывается публичным хостом.
+func TestInternalHostHeaderNotClientControlled(t *testing.T) {
+	// Обычный маршрут: бэкенд видит host таргета, а не клиентский заголовок.
+	f := newRouteProxy(t, config.RoutingRule{TargetName: "dav"})
+	req := httptest.NewRequest("GET", "/x", nil)
+	req.Header.Set(internalHostHeader, "evil.example")
+	rec := httptest.NewRecorder()
+	f.mp.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	wantHost := strings.TrimPrefix(f.upstream.URL, "http://")
+	if got := <-f.method; got != wantHost+"|GET" {
+		t.Fatalf("upstream saw %q, want %q (client %s must be ignored)", got, wantHost+"|GET", internalHostHeader)
+	}
+
+	// preserve_host: бэкенд видит публичный хост, а не клиентский заголовок.
+	f2 := newRouteProxy(t, config.RoutingRule{TargetName: "dav", PreserveHost: true})
+	req2 := httptest.NewRequest("GET", "/x", nil)
+	req2.Host = "dav.example"
+	req2.Header.Set(internalHostHeader, "evil.example")
+	rec2 := httptest.NewRecorder()
+	f2.mp.handler.ServeHTTP(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec2.Code)
+	}
+	if got := <-f2.method; got != "dav.example|GET" {
+		t.Fatalf("upstream saw %q, want preserved public host", got)
+	}
 }
 
 // TestRouteRejectsOversizedBody: тело больше лимита маршрута не обрезается
