@@ -633,6 +633,12 @@ func (mp *MultiProxy) newReverseProxy(target *TargetProxy) *httputil.ReverseProx
 						}
 						defer cancel()
 						ctx := context.WithValue(base, ctxKeyRetryAttempt, attempt+1)
+						// Director удалил internalHostHeader на первой попытке;
+						// для preserve_host восстанавливаем публичный хост,
+						// иначе retry уйдёт с host'ом таргета.
+						if host, ok := base.Value(ctxKeyPreservedHost).(string); ok {
+							req.Header.Set(internalHostHeader, host)
+						}
 						mp.logger.Warn("Retrying request after transport error",
 							zap.String("from", target.config.Name),
 							zap.String("to", next.config.Name),

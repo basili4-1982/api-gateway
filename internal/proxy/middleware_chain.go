@@ -33,6 +33,7 @@ const (
 	ctxKeyResponseContentType contextKey = "response_content_type"
 	ctxKeyRoute               contextKey = "route_config"
 	ctxKeyRetryAttempt        contextKey = "retry_attempt"
+	ctxKeyPreservedHost       contextKey = "preserved_host"
 )
 
 // requestIDs хранит request_id и trace_id одним значением контекста —
@@ -352,6 +353,9 @@ func (mp *MultiProxy) proxyHandler() http.Handler {
 
 		if rule != nil && rule.PreserveHost {
 			r.Header.Set(internalHostHeader, r.Host)
+			// Хост сохраняем и в контексте: Director удаляет заголовок при
+			// первой попытке, а retry в ErrorHandler восстановит его отсюда.
+			r = r.WithContext(context.WithValue(r.Context(), ctxKeyPreservedHost, r.Host))
 			if r.Header.Get("X-Forwarded-Host") == "" {
 				r.Header.Set("X-Forwarded-Host", r.Host)
 			}
