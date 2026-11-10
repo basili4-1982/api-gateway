@@ -1349,6 +1349,13 @@ func (mp *MultiProxy) Reload(cfg *config.Config) error {
 	mp.config.Store(cfg)
 	mp.targets = newTargets
 	mp.trustedProxies = trustedProxies
+	// Лимитеры старых route-пулов останавливаем до подмены: их cleanupLoop
+	// иначе живёт вечно (горутина + мапа на каждый rate-limited роут за reload).
+	for _, rc := range mp.routeConfigs {
+		if rc.RateLimit != nil {
+			rc.RateLimit.Stop()
+		}
+	}
 	mp.rebuildRouteConfigs(cfg)
 	mp.reloadGlobalLimiter(cfg)
 

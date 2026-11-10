@@ -366,6 +366,49 @@ func TestReload_MultiTargetFailureLeavesStateIntact(t *testing.T) {
 	}
 }
 
+// TestReload_StopsOldRateLimiters: успешный Reload подменяет route-пулы;
+// cleanupLoop старых лимитеров не должен оставаться работать вечно.
+func TestReload_StopsOldRateLimiters(t *testing.T) {
+	oldCfg := &config.Config{
+		Targets: []config.TargetConfig{{Name: "a", URL: "http://a:9000", Timeout: 5 * time.Second}},
+		Routing: config.RoutingConfig{Rules: []config.RoutingRule{
+			{PathPrefix: "/a", TargetName: "a", RateLimit: &config.RateLimitRule{RequestsPerSecond: 1, Burst: 1}},
+		}},
+	}
+	mp := &MultiProxy{
+		targets:     map[string]*TargetProxy{},
+		routeByRule: map[*config.RoutingRule]*RouteConfig{},
+		logger:      zap.NewNop(),
+	}
+	mp.config.Store(oldCfg)
+	oldA := &TargetProxy{config: &oldCfg.Targets[0], healthCheck: &HealthChecker{stopCh: make(chan struct{})}}
+	mp.targets["a"] = oldA
+	mp.rebuildRouteConfigs(oldCfg)
+
+	oldLimiter := mp.routeByRule[&oldCfg.Routing.Rules[0]].RateLimit
+	if oldLimiter == nil {
+		t.Fatal("test setup: expected rate limiter")
+	}
+
+	newCfg := &config.Config{
+		Targets: []config.TargetConfig{{Name: "a", URL: "http://a:9000", Timeout: 5 * time.Second}},
+		Routing: config.RoutingConfig{Rules: []config.RoutingRule{
+			{PathPrefix: "/a", TargetName: "a", RateLimit: &config.RateLimitRule{RequestsPerSecond: 2, Burst: 2}},
+		}},
+	}
+	if err := mp.Reload(newCfg); err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+
+	select {
+	case <-oldLimiter.stopCh:
+	default:
+		t.Fatal("old rate limiter must be stopped on successful reload")
+	}
+	// Повторный Stop не должен паниковать (двойное закрытие канала).
+	oldLimiter.Stop()
+}
+
 func TestHealthCheckerStop_Idempotent(t *testing.T) {
 	hc := &HealthChecker{stopCh: make(chan struct{})}
 	hc.Stop()
