@@ -1135,6 +1135,12 @@ func (c *Config) validate() error {
 		if rule.Retries < 0 || rule.Retries > 5 {
 			return fmt.Errorf("routing rule retries must be between 0 and 5, got %d", rule.Retries)
 		}
+		// Подпись v3 считается по исходному (pre-strip) пути, а бэкенд видит
+		// путь после strip и пересчитывает HMAC по нему — проверка упадёт.
+		// Запрещаем сочетание, а не молчаливую поломку аутентификации.
+		if rule.StripPath && rule.SignV3 != nil {
+			return fmt.Errorf("routing rule %q: strip_path and sign_v3 are incompatible (the signature is computed over the pre-strip path)", rule.PathPrefix)
+		}
 		// Правила, совпадающие по (host, path_prefix, methods), делят один пул
 		// балансировки. Политика пула (auth, strip_path, rate_limit) должна
 		// совпадать, иначе поведение запроса зависело бы от выбранного таргета.

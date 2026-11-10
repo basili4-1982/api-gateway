@@ -2129,3 +2129,49 @@ func TestRestConfigDefaults(t *testing.T) {
 		t.Fatal("nil rest must yield defaults")
 	}
 }
+
+func TestLoad_StripPathWithSignV3Rejected(t *testing.T) {
+	yaml := `
+targets:
+  - name: "admin"
+    url: "http://admin:9001"
+routing:
+  rules:
+    - path_prefix: "/admin"
+      target_name: "admin"
+      strip_path: true
+      sign_v3:
+        service_id: "gateway"
+        key_id: "k1"
+        secret: "s3cret"
+`
+	path := writeTempConfig(t, yaml)
+	_, _, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for strip_path + sign_v3")
+	}
+	if !strings.Contains(err.Error(), "strip_path") || !strings.Contains(err.Error(), "sign_v3") {
+		t.Fatalf("error must name strip_path and sign_v3, got: %v", err)
+	}
+}
+
+func TestLoad_SignV3WithoutStripPathAccepted(t *testing.T) {
+	yaml := `
+targets:
+  - name: "admin"
+    url: "http://admin:9001"
+routing:
+  rules:
+    - path_prefix: "/admin"
+      target_name: "admin"
+      strip_path: false
+      sign_v3:
+        service_id: "gateway"
+        key_id: "k1"
+        secret: "s3cret"
+`
+	path := writeTempConfig(t, yaml)
+	if _, _, err := Load(path); err != nil {
+		t.Fatalf("sign_v3 without strip_path must be accepted, got: %v", err)
+	}
+}
