@@ -738,9 +738,7 @@ func (mp *MultiProxy) modifyRequest(r *http.Request, targetCfg *config.TargetCon
 		r.Header.Del("Authorization")
 	}
 
-	if clientIP := r.Header.Get("X-Forwarded-For"); clientIP == "" {
-		r.Header.Set("X-Forwarded-For", r.RemoteAddr)
-	}
+	mp.setForwardedFor(r)
 
 	return nil
 }
@@ -756,11 +754,25 @@ func (mp *MultiProxy) finishRequestHeaders(r *http.Request, stripToken bool) err
 		r.Header.Del("Authorization")
 	}
 
-	if clientIP := r.Header.Get("X-Forwarded-For"); clientIP == "" {
-		r.Header.Set("X-Forwarded-For", r.RemoteAddr)
-	}
+	mp.setForwardedFor(r)
 
 	return nil
+}
+
+// setForwardedFor готовит X-Forwarded-For для бэкенда. Пир без доверия (не из
+// server.trusted_proxies) не имеет права навязывать цепочку: клиентский XFF
+// удаляется, иначе бэкенды получали бы поддельный IP для своих ACL и аудита.
+// От доверенного прокси цепочка сохраняется. Адрес непосредственного пира
+// дописывает сам httputil.ReverseProxy — поэтому здесь он не добавляется.
+func (mp *MultiProxy) setForwardedFor(r *http.Request) {
+	remote := hostOnly(r.RemoteAddr)
+	mp.mu.RLock()
+	trusted := mp.trustedProxies
+	mp.mu.RUnlock()
+	if ipTrusted(remote, trusted) {
+		return
+	}
+	r.Header.Del("X-Forwarded-For")
 }
 
 // AuthConnector — внешний аутентификатор, подключённый compile-time модулем.
