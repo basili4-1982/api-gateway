@@ -102,6 +102,40 @@ func TestResolve_InactiveUser(t *testing.T) {
 	}
 }
 
+func TestResolve_UnverifiedEmailRejected(t *testing.T) {
+	srv := lookupServer(t)
+	defer srv.Close()
+	m, _ := NewManager(managerCfg(srv.URL), zap.NewNop())
+
+	token := signHS256(t, "partner-secret", jwt.MapClaims{
+		"email":          "active@example.com",
+		"email_verified": false,
+		"exp":            time.Now().Add(time.Hour).Unix(),
+	})
+	if _, err := m.Resolve(context.Background(), token); err == nil {
+		t.Fatal("expected error for email_verified=false")
+	}
+}
+
+func TestResolve_VerifiedEmailAccepted(t *testing.T) {
+	srv := lookupServer(t)
+	defer srv.Close()
+	m, _ := NewManager(managerCfg(srv.URL), zap.NewNop())
+
+	token := signHS256(t, "partner-secret", jwt.MapClaims{
+		"email":          "active@example.com",
+		"email_verified": true,
+		"exp":            time.Now().Add(time.Hour).Unix(),
+	})
+	u, err := m.Resolve(context.Background(), token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if u.ID != 42 {
+		t.Fatalf("unexpected user: %+v", u)
+	}
+}
+
 func TestResolve_NoEmailClaim(t *testing.T) {
 	srv := lookupServer(t)
 	defer srv.Close()

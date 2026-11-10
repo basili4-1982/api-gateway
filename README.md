@@ -290,9 +290,11 @@ Claims маппятся в заголовки для бэкендов (`jwt.clai
 идентичности для внутренних сервисов.
 
 Секция `identity` принимает **внешние** JWT партнёрских провайдеров (свой
-`secret_key`/`public_key_file` либо RS/ES по удалённому `jwks_url`) и маппит
+`secret_key`/`public_key_file` либо RS/ES по удалённому `jwks_url` — только
+https, http разрешён лишь для loopback) и маппит
 их на внутреннего пользователя: резолв по `(subject_provider, sub)` с фолбэком
-на email через passport user-lookup с кешем (`identity.user_lookup`). Дальше
+на email через passport user-lookup с кешем (`identity.user_lookup`). Токен с
+явным `email_verified: false` по email-пути не резолвится. Дальше
 такой запрос идёт как обычный аутентифицированный — с ролями, заголовками и
 permissions.
 

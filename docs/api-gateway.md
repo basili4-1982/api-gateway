@@ -21,7 +21,7 @@
 - CORS, Basic Auth, проброс claims в заголовки, HMAC-подпись запросов.
 - Раздача статики и SPA с fallback на `index.html`.
 - Service discovery Docker/Podman по labels с аварийным фолбэком в файл состояния.
-- Вебхуки и NATS: события `on_request`/`on_response`, батчинг, backpressure.
+- Вебхуки и NATS: события `on_request`/`on_response`, батчинг, неблокирующая постановка с метрикой потерь.
 - Автоматический TLS (Let's Encrypt: HTTP-01/TLS-ALPN-01 и DNS-01 для wildcard), метрики и трейсинг (OpenTelemetry).
 
 ## Как читать справочник

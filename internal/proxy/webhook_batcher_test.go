@@ -38,7 +38,7 @@ func TestWebhookBatcher_FlushesOnSize(t *testing.T) {
 		BatchSize:     3,
 		FlushInterval: time.Hour, // чтобы флаш случился именно по размеру
 	}
-	b := newWebhookBatcher(wh, srv.Client(), zap.NewNop())
+	b := newWebhookBatcher(wh, srv.Client(), zap.NewNop(), nil)
 	defer b.close()
 
 	for i := 0; i < 3; i++ {
@@ -64,7 +64,7 @@ func TestWebhookBatcher_FlushesOnInterval(t *testing.T) {
 		BatchSize:     100,
 		FlushInterval: 50 * time.Millisecond,
 	}
-	b := newWebhookBatcher(wh, srv.Client(), zap.NewNop())
+	b := newWebhookBatcher(wh, srv.Client(), zap.NewNop(), nil)
 	defer b.close()
 
 	b.enqueue(AuditEvent{Method: "POST", Path: "/y"})
@@ -88,7 +88,7 @@ func TestWebhookBatcher_FlushRemainingOnClose(t *testing.T) {
 		BatchSize:     100,
 		FlushInterval: time.Hour,
 	}
-	b := newWebhookBatcher(wh, srv.Client(), zap.NewNop())
+	b := newWebhookBatcher(wh, srv.Client(), zap.NewNop(), nil)
 	b.enqueue(AuditEvent{Method: "PUT", Path: "/z"})
 	b.close() // должен слить остаток
 
@@ -102,9 +102,10 @@ func TestWebhookBatcher_FlushRemainingOnClose(t *testing.T) {
 	}
 }
 
-// TestWebhookBatcher_BlocksWhenFull проверяет backpressure: при переполнении
-// очереди постановка события блокируется (потерь быть не должно).
-func TestWebhookBatcher_BlocksWhenFull(t *testing.T) {
+// TestWebhookBatcher_DropsWhenFull: при переполнении очереди постановка не
+// блокирует запрос, а отбрасывает событие со счётчиком dropped — приёмник
+// аудита не должен останавливать основной трафик шлюза.
+func TestWebhookBatcher_DropsWhenFull(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-release
@@ -119,7 +120,7 @@ func TestWebhookBatcher_BlocksWhenFull(t *testing.T) {
 		BatchSize:     1,
 		FlushInterval: time.Hour,
 	}
-	b := newWebhookBatcherWithQueue(wh, srv.Client(), zap.NewNop(), 1)
+	b := newWebhookBatcherWithQueue(wh, srv.Client(), zap.NewNop(), nil, 1)
 	var once sync.Once
 	releaseSink := func() { once.Do(func() { close(release) }) }
 	defer func() { releaseSink(); b.close() }()
@@ -132,14 +133,39 @@ func TestWebhookBatcher_BlocksWhenFull(t *testing.T) {
 	go func() { b.enqueue(AuditEvent{Path: "/3"}); close(done) }()
 	select {
 	case <-done:
-		t.Fatal("enqueue must block when the queue is full")
-	case <-time.After(200 * time.Millisecond):
-	}
-
-	releaseSink() // разблокируем sink — очередь должна рассосаться
-	select {
-	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("enqueue did not unblock after delivery caught up")
+		t.Fatal("enqueue must not block on a full queue")
+	}
+	if got := b.dropped.Load(); got != 1 {
+		t.Fatalf("dropped = %d, want 1", got)
+	}
+}
+
+// TestWebhookBatcher_CountsFailedDelivery: неудачный POST теряет пачку —
+// потеря должна попасть в счётчик dropped, а не исчезнуть тихо.
+func TestWebhookBatcher_CountsFailedDelivery(t *testing.T) {
+	// Сервер закрыт сразу: каждый POST падает с connection refused.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.Close()
+
+	wh := config.WebhookConfig{
+		Name:          "audit",
+		Transport:     config.TransportWebhook,
+		WebhookURL:    srv.URL,
+		BatchSize:     2,
+		FlushInterval: time.Hour,
+	}
+	b := newWebhookBatcher(wh, srv.Client(), zap.NewNop(), nil)
+	defer b.close()
+
+	b.enqueue(AuditEvent{Path: "/1"})
+	b.enqueue(AuditEvent{Path: "/2"}) // флаш по размеру → POST упадёт
+
+	deadline := time.Now().Add(2 * time.Second)
+	for b.dropped.Load() != 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := b.dropped.Load(); got != 2 {
+		t.Fatalf("dropped = %d, want 2 (failed batch counted)", got)
 	}
 }

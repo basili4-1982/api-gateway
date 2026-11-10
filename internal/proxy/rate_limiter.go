@@ -19,6 +19,7 @@ type IPRateLimiter struct {
 	cleanupInterval time.Duration
 	ttl             time.Duration
 	stopCh          chan struct{}
+	stopOnce        sync.Once
 }
 
 func NewIPRateLimiter(r float64, burst int) *IPRateLimiter {
@@ -35,8 +36,9 @@ func NewIPRateLimiter(r float64, burst int) *IPRateLimiter {
 	return l
 }
 
+// Stop останавливает фоновую очистку; повторные вызовы безопасны.
 func (l *IPRateLimiter) Stop() {
-	close(l.stopCh)
+	l.stopOnce.Do(func() { close(l.stopCh) })
 }
 
 func (l *IPRateLimiter) GetLimiter(ip string) *rate.Limiter {

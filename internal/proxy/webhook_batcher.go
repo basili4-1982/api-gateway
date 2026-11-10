@@ -31,17 +31,19 @@ type webhookBatcher struct {
 	wh        config.WebhookConfig
 	client    *http.Client
 	log       *zap.Logger
+	metrics   *Metrics
 	ch        chan AuditEvent
 	flushInt  time.Duration
 	wg        sync.WaitGroup
 	saturated atomic.Bool
+	dropped   atomic.Int64
 }
 
-func newWebhookBatcher(wh config.WebhookConfig, client *http.Client, log *zap.Logger) *webhookBatcher {
-	return newWebhookBatcherWithQueue(wh, client, log, defaultBatchQueueSize)
+func newWebhookBatcher(wh config.WebhookConfig, client *http.Client, log *zap.Logger, metrics *Metrics) *webhookBatcher {
+	return newWebhookBatcherWithQueue(wh, client, log, metrics, defaultBatchQueueSize)
 }
 
-func newWebhookBatcherWithQueue(wh config.WebhookConfig, client *http.Client, log *zap.Logger, queueSize int) *webhookBatcher {
+func newWebhookBatcherWithQueue(wh config.WebhookConfig, client *http.Client, log *zap.Logger, metrics *Metrics, queueSize int) *webhookBatcher {
 	if queueSize < 1 {
 		queueSize = 1
 	}
@@ -53,6 +55,7 @@ func newWebhookBatcherWithQueue(wh config.WebhookConfig, client *http.Client, lo
 		wh:       wh,
 		client:   client,
 		log:      log,
+		metrics:  metrics,
 		ch:       make(chan AuditEvent, queueSize),
 		flushInt: flush,
 	}
@@ -61,26 +64,38 @@ func newWebhookBatcherWithQueue(wh config.WebhookConfig, client *http.Client, lo
 	return b
 }
 
-// enqueue кладёт событие в очередь. Если очередь заполнена, постановка
-// блокируется (backpressure) — доставлять обязательно, потерь быть не должно.
-// О перегрузке сообщаем в лог один раз на эпизод, чтобы не спамить.
+// enqueue кладёт событие в очередь, не блокируя запрос: переполненная очередь
+// приёмника аудита не должна останавливать основной трафик шлюза (раньше
+// постановка блокировалась, и лёгкий webhook endpoint каскадно вешал прокси —
+// при этом гарантии «без потерь» всё равно не было, см. send). При полной
+// очереди событие отбрасывается со счётчиком dropped и метрикой; о перегрузке
+// сообщаем в лог один раз на эпизод, чтобы не спамить.
 func (b *webhookBatcher) enqueue(ev AuditEvent) {
 	select {
 	case b.ch <- ev:
 		if b.saturated.Swap(false) {
-			b.log.Info("webhook queue drained, proxy unthrottled", zap.String("webhook", b.wh.Name))
+			b.log.Info("webhook queue drained, delivering again", zap.String("webhook", b.wh.Name))
 		}
 		return
 	default:
 	}
 
 	if b.saturated.CompareAndSwap(false, true) {
-		b.log.Error("webhook queue full: proxy throttled until webhooks are delivered",
+		b.log.Error("webhook queue full: dropping audit events",
 			zap.String("webhook", b.wh.Name),
 			zap.Int("queue_size", cap(b.ch)),
 		)
 	}
-	b.ch <- ev
+	b.countDropped(1)
+}
+
+// countDropped фиксирует потерю n событий: локальный счётчик для диагностики
+// и метрики шлюза (nil у конструируемых в тестах батчеров).
+func (b *webhookBatcher) countDropped(n int64) {
+	b.dropped.Add(n)
+	if b.metrics != nil {
+		b.metrics.IncWebhookDrops(b.wh.Name, n)
+	}
 }
 
 func (b *webhookBatcher) run() {
@@ -136,7 +151,14 @@ func (b *webhookBatcher) send(events []AuditEvent) {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		b.log.Error("failed to send webhook batch", zap.Error(err), zap.String("url", b.wh.WebhookURL))
+		// Пачка теряется: фиксируем в счётчике и метрике, чтобы «тихая»
+		// недоставка аудита была видна в мониторинге.
+		b.countDropped(int64(len(events)))
+		b.log.Error("failed to send webhook batch, events lost",
+			zap.Error(err),
+			zap.String("url", b.wh.WebhookURL),
+			zap.Int("events", len(events)),
+		)
 		return
 	}
 	resp.Body.Close()

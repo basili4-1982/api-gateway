@@ -25,6 +25,17 @@ func TestMetricsHandler_MultipleCallsDoNotPanic(t *testing.T) {
 	m.SetTargetUp("blog", true)
 	m.IncRateLimitDenial()
 
+	// Кардинальность expvar ограничена нормализованным префиксом: сырые пути
+	// (например, уникальные 404 от сканеров) не должны становиться ключами.
+	m.IncRequests("GET", "/api/blog/posts/42", "404")
+	m.IncRequests("GET", "/api/blog/posts/43", "404")
+	if v := m.requestsTotal.Get("GET:/api/blog:404"); v == nil || v.String() != "2" {
+		t.Fatalf("expvar key GET:/api/blog:404 = %v, want 2 (raw paths must fold into the prefix)", v)
+	}
+	if v := m.requestsTotal.Get("GET:/api/blog/posts/42:404"); v != nil {
+		t.Fatalf("raw path became an expvar key: %v", v)
+	}
+
 	rec := httptest.NewRecorder()
 	m.PromHandler().ServeHTTP(rec, httptest.NewRequest("GET", "/metrics/prometheus", nil))
 	body := rec.Body.String()

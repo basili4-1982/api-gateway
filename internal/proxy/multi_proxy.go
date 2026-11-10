@@ -316,7 +316,7 @@ func NewMultiProxy(cfg *config.Config, logger *zap.Logger) (*MultiProxy, error) 
 	}
 
 	if len(cfg.Webhooks) > 0 {
-		publisher, err := NewPublisher(cfg, logger)
+		publisher, err := NewPublisher(cfg, logger, mp.metrics)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create publisher: %w", err)
 		}
@@ -738,9 +738,7 @@ func (mp *MultiProxy) modifyRequest(r *http.Request, targetCfg *config.TargetCon
 		r.Header.Del("Authorization")
 	}
 
-	if clientIP := r.Header.Get("X-Forwarded-For"); clientIP == "" {
-		r.Header.Set("X-Forwarded-For", r.RemoteAddr)
-	}
+	mp.setForwardedFor(r)
 
 	return nil
 }
@@ -756,11 +754,25 @@ func (mp *MultiProxy) finishRequestHeaders(r *http.Request, stripToken bool) err
 		r.Header.Del("Authorization")
 	}
 
-	if clientIP := r.Header.Get("X-Forwarded-For"); clientIP == "" {
-		r.Header.Set("X-Forwarded-For", r.RemoteAddr)
-	}
+	mp.setForwardedFor(r)
 
 	return nil
+}
+
+// setForwardedFor готовит X-Forwarded-For для бэкенда. Пир без доверия (не из
+// server.trusted_proxies) не имеет права навязывать цепочку: клиентский XFF
+// удаляется, иначе бэкенды получали бы поддельный IP для своих ACL и аудита.
+// От доверенного прокси цепочка сохраняется. Адрес непосредственного пира
+// дописывает сам httputil.ReverseProxy — поэтому здесь он не добавляется.
+func (mp *MultiProxy) setForwardedFor(r *http.Request) {
+	remote := hostOnly(r.RemoteAddr)
+	mp.mu.RLock()
+	trusted := mp.trustedProxies
+	mp.mu.RUnlock()
+	if ipTrusted(remote, trusted) {
+		return
+	}
+	r.Header.Del("X-Forwarded-For")
 }
 
 // AuthConnector — внешний аутентификатор, подключённый compile-time модулем.
@@ -1337,6 +1349,13 @@ func (mp *MultiProxy) Reload(cfg *config.Config) error {
 	mp.config.Store(cfg)
 	mp.targets = newTargets
 	mp.trustedProxies = trustedProxies
+	// Лимитеры старых route-пулов останавливаем до подмены: их cleanupLoop
+	// иначе живёт вечно (горутина + мапа на каждый rate-limited роут за reload).
+	for _, rc := range mp.routeConfigs {
+		if rc.RateLimit != nil {
+			rc.RateLimit.Stop()
+		}
+	}
 	mp.rebuildRouteConfigs(cfg)
 	mp.reloadGlobalLimiter(cfg)
 
@@ -1544,9 +1563,36 @@ func (mp *MultiProxy) httpRedirectHandler() http.Handler {
 			mp.ServeHTTP(w, r)
 			return
 		}
-		target := fmt.Sprintf("https://%s%s", r.Host, r.URL.RequestURI())
+		target := fmt.Sprintf("https://%s%s", redirectHost(r.Host, cfg.TLS.Domains), r.URL.RequestURI())
 		http.Redirect(w, r, target, http.StatusMovedPermanently)
 	})
+}
+
+// redirectHost выбирает хост для Location HTTP→HTTPS редиректа: запрошенный,
+// если он входит в tls.domains (точно или по wildcard), иначе первый домен
+// конфигурации. Отражать произвольный Host в Location нельзя — это open
+// redirect на домен атакующего.
+func redirectHost(host string, domains []string) string {
+	h := strings.ToLower(host)
+	if hh, _, err := net.SplitHostPort(h); err == nil {
+		h = hh
+	}
+	for _, d := range domains {
+		if strings.HasPrefix(d, "*.") {
+			suffix := strings.ToLower(d[1:])
+			if strings.HasSuffix(h, suffix) && len(h) > len(suffix) {
+				return h
+			}
+			continue
+		}
+		if h == strings.ToLower(d) {
+			return h
+		}
+	}
+	if len(domains) > 0 {
+		return strings.TrimPrefix(domains[0], "*.")
+	}
+	return host
 }
 
 // serveStatic пытается отдать SPA статику, возвращает true если запрос обработан
