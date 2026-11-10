@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -35,7 +34,7 @@ func Main() {
 	if addr := os.Getenv("PPROF_ADDR"); addr != "" {
 		go func() {
 			fmt.Fprintf(os.Stderr, "pprof listening on %s\n", addr)
-			fmt.Fprintln(os.Stderr, http.ListenAndServe(addr, nil))
+			fmt.Fprintln(os.Stderr, http.ListenAndServe(addr, pprofMux()))
 		}()
 	}
 

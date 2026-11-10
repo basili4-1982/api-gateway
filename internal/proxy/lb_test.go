@@ -103,3 +103,50 @@ func TestRetryOnTransportError(t *testing.T) {
 		t.Fatalf("status = %d, body = %q", rec.Code, rec.Body.String())
 	}
 }
+
+// TestRetryPreservesHost проверяет, что при транспортной ошибке и retry на
+// другой таргет маршрут с preserve_host сохраняет публичный Host: Director
+// удалил X-Gateway-Internal-Host на первой попытке, и без восстановления из
+// контекста бэкенд увидел бы host второго таргета.
+func TestRetryPreservesHost(t *testing.T) {
+	const publicHost = "dav.example"
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(r.Host))
+	}))
+	defer good.Close()
+
+	cfg := &config.Config{
+		Targets: []config.TargetConfig{
+			{Name: "bad", URL: "http://127.0.0.1:1"},
+			{Name: "good", URL: good.URL},
+		},
+		Routing: config.RoutingConfig{Rules: []config.RoutingRule{
+			{PathPrefix: "/", TargetName: "bad", PreserveHost: true, Retries: 1},
+			{PathPrefix: "/", TargetName: "good", PreserveHost: true, Retries: 1},
+		}},
+	}
+	mp := &MultiProxy{
+		targets:     map[string]*TargetProxy{},
+		routeByRule: map[*config.RoutingRule]*RouteConfig{},
+		logger:      zap.NewNop(),
+		metrics:     NewMetrics(false),
+	}
+	mp.config.Store(cfg)
+	for i := range cfg.Targets {
+		tp, err := mp.createTargetProxy(&cfg.Targets[i], false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mp.targets[cfg.Targets[i].Name] = tp
+	}
+	mp.rebuildRouteConfigs(cfg)
+	mp.handler = mp.proxyHandler()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = publicHost
+	mp.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.String() != publicHost {
+		t.Fatalf("status = %d, upstream host = %q, want %q", rec.Code, rec.Body.String(), publicHost)
+	}
+}

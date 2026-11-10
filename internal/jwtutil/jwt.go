@@ -39,6 +39,11 @@ func NewJWTValidator(secretKey, algorithm string,
 	validateAud bool, expectedAud string,
 	publicKeyFile string,
 ) (*JWTValidator, error) {
+	// algorithm[:2] ниже: без проверки длины программно собранный конфиг
+	// (минуя YAML-дефолты) ронял бы процесс паникой вместо ошибки.
+	if len(algorithm) < 2 {
+		return nil, fmt.Errorf("invalid algorithm: %q", algorithm)
+	}
 
 	v := &JWTValidator{
 		algorithm:   algorithm,

@@ -1,6 +1,8 @@
 package permissions
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"net/http"
 	"strconv"
 	"strings"
@@ -8,6 +10,11 @@ import (
 	"code.sarnas.ru/api-gateway/internal/config"
 	"go.uber.org/zap"
 )
+
+func sha256Sum(s string) []byte {
+	sum := sha256.Sum256([]byte(s))
+	return sum[:]
+}
 
 type Manager struct {
 	client *Client
@@ -63,7 +70,9 @@ func (m *Manager) InvalidateCacheHandler(w http.ResponseWriter, r *http.Request)
 		http.Error(w, `{"error":"missing X-Invalidate-Token"}`, http.StatusUnauthorized)
 		return
 	}
-	if token != m.cfg.InvalidateToken {
+	// Сравнение через sha256-проекции: constant-time независимо от длины
+	// токена (как в basic_auth.go), по времени ответа токен не перебрать.
+	if subtle.ConstantTimeCompare(sha256Sum(token), sha256Sum(m.cfg.InvalidateToken)) != 1 {
 		http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
 		return
 	}

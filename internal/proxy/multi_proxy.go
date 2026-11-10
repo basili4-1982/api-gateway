@@ -224,7 +224,14 @@ type HealthChecker struct {
 	timeout  time.Duration
 	stopCh   chan struct{}
 	stopOnce sync.Once
+	// client переиспользуется между проверками: новый http.Client на каждый
+	// тик — это соединение без keep-alive и аллокации транспорта.
+	client *http.Client
 }
+
+// healthCheckMaxBodyBytes — предел чтения тела health check: больше для
+// диагностики не нужно, а бесконечный ответ не должен раздувать память.
+const healthCheckMaxBodyBytes = 64 << 10
 
 // Stop останавливает горутину health check; повторные вызовы безопасны.
 func (hc *HealthChecker) Stop() {
@@ -500,6 +507,7 @@ func (mp *MultiProxy) createTargetProxy(targetCfg *config.TargetConfig, healthCh
 			period:  30 * time.Second,
 			timeout: 5 * time.Second,
 			stopCh:  make(chan struct{}),
+			client:  &http.Client{Timeout: 5 * time.Second},
 		}
 		go tp.startHealthCheck(mp.logger, mp)
 	}
@@ -625,6 +633,12 @@ func (mp *MultiProxy) newReverseProxy(target *TargetProxy) *httputil.ReverseProx
 						}
 						defer cancel()
 						ctx := context.WithValue(base, ctxKeyRetryAttempt, attempt+1)
+						// Director удалил internalHostHeader на первой попытке;
+						// для preserve_host восстанавливаем публичный хост,
+						// иначе retry уйдёт с host'ом таргета.
+						if host, ok := base.Value(ctxKeyPreservedHost).(string); ok {
+							req.Header.Set(internalHostHeader, host)
+						}
 						mp.logger.Warn("Retrying request after transport error",
 							zap.String("from", target.config.Name),
 							zap.String("to", next.config.Name),
@@ -1067,17 +1081,6 @@ func (mp *MultiProxy) proxyRequest(w http.ResponseWriter, r *http.Request, targe
 	r.Header.Del(internalPathHeader)
 }
 
-// Обработчик OPTIONS запросов
-func (mp *MultiProxy) handlePreflight(w http.ResponseWriter, r *http.Request) {
-	mp.setCORSHeaders(w.Header(), r)
-	w.WriteHeader(http.StatusOK)
-
-	mp.logger.Debug("Handled preflight request",
-		zap.String("origin", r.Header.Get("Origin")),
-		zap.String("method", r.Header.Get("Access-Control-Request-Method")),
-	)
-}
-
 // ServeHTTP реализует http.Handler — делегирует в middleware цепочку
 func (mp *MultiProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mp.handler.ServeHTTP(w, r)
@@ -1238,8 +1241,9 @@ func (tp *TargetProxy) startHealthCheck(logger *zap.Logger, mp *MultiProxy) {
 
 // checkHealth выполняет проверку здоровья
 func (tp *TargetProxy) checkHealth(logger *zap.Logger, mp *MultiProxy) {
-	client := &http.Client{
-		Timeout: tp.healthCheck.timeout,
+	client := tp.healthCheck.client
+	if client == nil {
+		client = &http.Client{Timeout: tp.healthCheck.timeout}
 	}
 
 	resp, err := client.Get(tp.healthCheck.url)
@@ -1258,8 +1262,9 @@ func (tp *TargetProxy) checkHealth(logger *zap.Logger, mp *MultiProxy) {
 		}
 	}(resp.Body)
 
-	// Читаем тело ответа health check
-	body, err := io.ReadAll(resp.Body)
+	// Читаем тело ответа health check с пределом: статус уже известен,
+	// тело нужно только для лога.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, healthCheckMaxBodyBytes))
 	if err != nil {
 		logger.Warn("Health check failed")
 		return
