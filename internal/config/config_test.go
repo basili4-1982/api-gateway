@@ -2175,3 +2175,57 @@ routing:
 		t.Fatalf("sign_v3 without strip_path must be accepted, got: %v", err)
 	}
 }
+
+func TestLoad_IdentityJwksURLOverPlainHTTPRejected(t *testing.T) {
+	yaml := `
+targets:
+  - name: "api"
+    url: "http://api:9001"
+identity:
+  enabled: true
+  user_lookup:
+    service_url: "http://passport:8085"
+    hmac_secret: "internal-secret"
+  providers:
+    - name: "cml"
+      enabled: true
+      algorithm: "RS256"
+      jwks_url: "http://cml.example.com/.well-known/jwks"
+`
+	path := writeTempConfig(t, yaml)
+	_, _, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for plain-http jwks_url")
+	}
+	if !strings.Contains(err.Error(), "jwks_url") {
+		t.Fatalf("error must name jwks_url, got: %v", err)
+	}
+}
+
+func TestLoad_IdentityJwksURLLoopbackHTTPAccepted(t *testing.T) {
+	for _, u := range []string{
+		"http://127.0.0.1:8080/.well-known/jwks",
+		"http://localhost/.well-known/jwks",
+		"http://[::1]:8080/.well-known/jwks",
+	} {
+		yaml := `
+targets:
+  - name: "api"
+    url: "http://api:9001"
+identity:
+  enabled: true
+  user_lookup:
+    service_url: "http://passport:8085"
+    hmac_secret: "internal-secret"
+  providers:
+    - name: "cml"
+      enabled: true
+      algorithm: "RS256"
+      jwks_url: "` + u + `"
+`
+		path := writeTempConfig(t, yaml)
+		if _, _, err := Load(path); err != nil {
+			t.Fatalf("loopback jwks_url %s must be accepted, got: %v", u, err)
+		}
+	}
+}

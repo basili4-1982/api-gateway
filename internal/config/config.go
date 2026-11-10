@@ -1321,6 +1321,11 @@ func (c *Config) validate() error {
 			if p.JwksURL != "" && algPrefix != "RS" && algPrefix != "ES" {
 				return fmt.Errorf("identity provider %s: jwks_url requires RS* or ES* algorithm", p.Name)
 			}
+			if p.JwksURL != "" {
+				if err := validateJWKSURL(p.JwksURL); err != nil {
+					return fmt.Errorf("identity provider %s: %w", p.Name, err)
+				}
+			}
 			// Инвариант разделения секретов: партнёрский HMAC-секрет не должен
 			// совпадать с нашими, иначе партнёрский токен прошёл бы как наш.
 			if algPrefix == "HS" {
@@ -1341,6 +1346,26 @@ func (c *Config) validate() error {
 	}
 
 	return nil
+}
+
+// validateJWKSURL требует https для JWK Set: по plain http набор ключей
+// подменяется в сети, и подписи чужих токенов проверялись бы ключом
+// атакующего. http разрешён только к loopback (локальный IdP в dev-стенде).
+func validateJWKSURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("jwks_url is invalid: %q", raw)
+	}
+	if u.Scheme == "https" {
+		return nil
+	}
+	if u.Scheme == "http" {
+		switch host := u.Hostname(); {
+		case host == "localhost" || host == "::1" || strings.HasPrefix(host, "127."):
+			return nil
+		}
+	}
+	return fmt.Errorf("jwks_url must use https (http is allowed only for loopback): %q", raw)
 }
 
 // normalizeRequestHost отбрасывает порт из заголовка Host. Для IPv6
