@@ -224,7 +224,14 @@ type HealthChecker struct {
 	timeout  time.Duration
 	stopCh   chan struct{}
 	stopOnce sync.Once
+	// client переиспользуется между проверками: новый http.Client на каждый
+	// тик — это соединение без keep-alive и аллокации транспорта.
+	client *http.Client
 }
+
+// healthCheckMaxBodyBytes — предел чтения тела health check: больше для
+// диагностики не нужно, а бесконечный ответ не должен раздувать память.
+const healthCheckMaxBodyBytes = 64 << 10
 
 // Stop останавливает горутину health check; повторные вызовы безопасны.
 func (hc *HealthChecker) Stop() {
@@ -500,6 +507,7 @@ func (mp *MultiProxy) createTargetProxy(targetCfg *config.TargetConfig, healthCh
 			period:  30 * time.Second,
 			timeout: 5 * time.Second,
 			stopCh:  make(chan struct{}),
+			client:  &http.Client{Timeout: 5 * time.Second},
 		}
 		go tp.startHealthCheck(mp.logger, mp)
 	}
@@ -1227,8 +1235,9 @@ func (tp *TargetProxy) startHealthCheck(logger *zap.Logger, mp *MultiProxy) {
 
 // checkHealth выполняет проверку здоровья
 func (tp *TargetProxy) checkHealth(logger *zap.Logger, mp *MultiProxy) {
-	client := &http.Client{
-		Timeout: tp.healthCheck.timeout,
+	client := tp.healthCheck.client
+	if client == nil {
+		client = &http.Client{Timeout: tp.healthCheck.timeout}
 	}
 
 	resp, err := client.Get(tp.healthCheck.url)
@@ -1247,8 +1256,9 @@ func (tp *TargetProxy) checkHealth(logger *zap.Logger, mp *MultiProxy) {
 		}
 	}(resp.Body)
 
-	// Читаем тело ответа health check
-	body, err := io.ReadAll(resp.Body)
+	// Читаем тело ответа health check с пределом: статус уже известен,
+	// тело нужно только для лога.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, healthCheckMaxBodyBytes))
 	if err != nil {
 		logger.Warn("Health check failed")
 		return

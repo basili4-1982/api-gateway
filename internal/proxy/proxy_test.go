@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -363,6 +364,35 @@ func TestReload_MultiTargetFailureLeavesStateIntact(t *testing.T) {
 			t.Fatalf("old healthcheck for target %s must not be stopped on failed reload", name)
 		default:
 		}
+	}
+}
+
+// TestCheckHealth_LargeBodyStaysHealthy: тело health check больше лимита
+// чтения не ломает проверку — статус учитывается, тело просто урезается.
+func TestCheckHealth_LargeBodyStaysHealthy(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(bytes.Repeat([]byte("x"), 1<<20)) // 1 МиБ >> 64 КиБ
+	}))
+	defer upstream.Close()
+
+	tp := &TargetProxy{
+		config: &config.TargetConfig{Name: "t"},
+		healthCheck: &HealthChecker{
+			url:     upstream.URL,
+			timeout: 5 * time.Second,
+			stopCh:  make(chan struct{}),
+			client:  upstream.Client(),
+		},
+	}
+	mp := &MultiProxy{metrics: NewMetrics(false)}
+
+	tp.checkHealth(zap.NewNop(), mp)
+
+	tp.mu.RLock()
+	healthy := tp.healthy
+	tp.mu.RUnlock()
+	if !healthy {
+		t.Fatal("target must be healthy: status 200, body size is irrelevant")
 	}
 }
 
