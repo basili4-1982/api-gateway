@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"strings"
 	"testing"
 )
 
@@ -17,14 +18,16 @@ func buildHello() []byte {
 		ext = append(ext, hdr[:]...)
 		ext = append(ext, data...)
 	}
-	addExt(0, append([]byte{0x00, 0x00, 0x0b, 0x00, 0x00, 0x08}, []byte("example.")...))
-	addExt(10, []byte{0x00, 0x02, 0x00, 0x1d})
+	addExt(0, []byte{0x00, 0x0b, 0x00, 0x00, 0x08, 'e', 'x', 'a', 'm', 'p', 'l', 'e', '.'})
+	addExt(16, []byte{0x00, 0x03, 0x02, 'h', '2'})         // ALPN: h2
+	addExt(43, []byte{0x02, 0x03, 0x04})                   // supported_versions: TLS 1.3
+	addExt(10, []byte{0x00, 0x04, 0x1a, 0x1a, 0x00, 0x1d}) // GREASE + x25519
 	addExt(11, []byte{0x01, 0x00})
 
 	body := []byte{0x03, 0x03}
 	body = append(body, make([]byte, 32)...)
 	body = append(body, 0x00)
-	body = append(body, 0x00, 0x02, 0x13, 0x01)
+	body = append(body, 0x00, 0x04, 0x0a, 0x0a, 0x13, 0x01) // GREASE + TLS_AES_128_GCM
 	body = append(body, 0x01, 0x00)
 	var extLen [2]byte
 	binary.BigEndian.PutUint16(extLen[:], uint16(len(ext)))
@@ -50,19 +53,22 @@ func TestParseClientHello(t *testing.T) {
 	if h.Version != 0x0303 {
 		t.Fatalf("версия = %x", h.Version)
 	}
-	if len(h.Ciphers) != 1 || h.Ciphers[0] != 0x1301 {
+	if len(h.Ciphers) != 2 {
 		t.Fatalf("шифры = %v", h.Ciphers)
 	}
-	if len(h.Curves) != 1 || h.Curves[0] != 29 {
+	if len(h.Curves) != 2 {
 		t.Fatalf("кривые = %v", h.Curves)
 	}
-	if len(h.Extensions) != 3 {
+	if len(h.Extensions) != 5 {
 		t.Fatalf("расширения = %v", h.Extensions)
+	}
+	if len(h.ALPN) != 1 || h.ALPN[0] != "h2" {
+		t.Fatalf("ALPN = %v", h.ALPN)
 	}
 }
 
 func TestJA3MatchesKnownString(t *testing.T) {
-	want := "771,4865,0-10-11,29,0"
+	want := "771,2570-4865,0-16-43-10-11,6682-29,0"
 	h, err := ParseClientHello(buildHello())
 	if err != nil {
 		t.Fatal(err)
@@ -109,8 +115,7 @@ func (l *pipeListener) Addr() net.Addr { return &net.TCPAddr{IP: net.IPv4(127, 0
 func TestListenerCapturesHello(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	ln := &pipeListener{conn: serverConn, done: make(chan struct{})}
-	reg := NewRegistry()
-	peek := NewListener(ln, reg, nil)
+	peek := NewListener(ln, nil)
 
 	hello := buildHello()
 	go func() {
@@ -122,8 +127,13 @@ func TestListenerCapturesHello(t *testing.T) {
 		t.Fatalf("accept: %v", err)
 	}
 
-	if got := reg.Get(serverConn.RemoteAddr().String()); got == "" {
-		t.Fatal("отпечаток не записан")
+	fp, ok := conn.(Fingerprinted)
+	if !ok {
+		t.Fatal("соединение не отдаёт отпечаток")
+	}
+	ja4, ja3 := fp.Fingerprint()
+	if ja4 == "" || ja3 == "" {
+		t.Fatalf("отпечатки пусты: %q %q", ja4, ja3)
 	}
 
 	// Соединение должно отдавать уже прочитанные байты: TLS-сервер не увидит дыру.
@@ -133,5 +143,40 @@ func TestListenerCapturesHello(t *testing.T) {
 	}
 	if string(buf) != string(hello) {
 		t.Fatal("байты ClientHello потерялись при replay")
+	}
+}
+
+func TestJA4Prefix(t *testing.T) {
+	h, err := ParseClientHello(buildHello())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := h.JA4()
+	// t + 13 + d (SNI есть) + 1 шифр (GREASE вырезан) + 5 расширений + h2
+	wantPrefix := "t13d15h2_"
+	if len(got) < len(wantPrefix) || got[:len(wantPrefix)] != wantPrefix {
+		t.Fatalf("префикс JA4 = %q, ожидался %q", got, wantPrefix)
+	}
+	parts := strings.Split(got, "_")
+	if len(parts) != 3 {
+		t.Fatalf("формат JA4 = %q", got)
+	}
+	for _, p := range parts[1:] {
+		if len(p) != 12 {
+			t.Fatalf("хеш в JA4 = %q, ожидались 12 символов", p)
+		}
+	}
+}
+
+func TestJA4IgnoresGREASE(t *testing.T) {
+	withGREASE, err := ParseClientHello(buildHello())
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean := withGREASE
+	clean.Ciphers = []uint16{0x1301}
+	clean.Curves = []uint16{0x1d}
+	if withGREASE.JA4() != clean.JA4() {
+		t.Fatal("GREASE не должен влиять на JA4")
 	}
 }

@@ -21,6 +21,10 @@ type Hello struct {
 	Curves     []uint16
 	Formats    []uint8
 	ServerName string
+	// ALPN — протоколы приложения из расширения 16 (h2, http/1.1).
+	ALPN []string
+	// supportedVersion — версия из расширения 43: 0x0304 значит TLS 1.3.
+	supportedVersion uint16
 }
 
 // ErrShortHello — данных меньше, чем нужно для разбора.
@@ -106,6 +110,30 @@ func ParseClientHello(b []byte) (Hello, error) {
 					h.Curves = append(h.Curves, binary.BigEndian.Uint16(data[i:i+2]))
 				}
 			}
+		case 16: // ALPN
+			if len(data) >= 2 {
+				n := int(binary.BigEndian.Uint16(data[0:2]))
+				p2 := data[2:]
+				for len(p2) >= 1 && n > 0 {
+					l := int(p2[0])
+					if len(p2) < 1+l {
+						break
+					}
+					h.ALPN = append(h.ALPN, string(p2[1:1+l]))
+					p2 = p2[1+l:]
+					n -= 1 + l
+				}
+			}
+		case 43: // supported_versions
+			if len(data) >= 3 {
+				n := int(data[0])
+				for i := 1; i+1 < 1+n && i+1 < len(data); i += 2 {
+					v := binary.BigEndian.Uint16(data[i : i+2])
+					if v > h.supportedVersion {
+						h.supportedVersion = v
+					}
+				}
+			}
 		case 11: // ec_point_formats
 			if len(data) >= 1 {
 				n := int(data[0])
@@ -148,4 +176,10 @@ func JA3(b []byte) (string, error) {
 	}
 	sum := md5.Sum([]byte(h.String()))
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// sumMD5 — хеш JA3.
+func sumMD5(s string) string {
+	sum := md5.Sum([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
