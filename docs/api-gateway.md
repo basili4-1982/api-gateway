@@ -19,6 +19,7 @@
 - Health checks таргетов и circuit breaker на ошибках транспорта.
 - Взвешенная балансировка нескольких таргетов одного маршрута.
 - CORS, Basic Auth, проброс claims в заголовки, HMAC-подпись запросов.
+- Отпечаток TLS-клиента (JA4/JA3) в заголовках — модуль [fingerprint](fingerprint.md), TCP и HTTP/3.
 - Раздача статики и SPA с fallback на `index.html`.
 - Service discovery Docker/Podman по labels с аварийным фолбэком в файл состояния.
 - Вебхуки и NATS: события `on_request`/`on_response`, батчинг, backpressure.
