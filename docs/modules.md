@@ -8,14 +8,16 @@
 | `code.sarnas.ru/xgate-modules/dns-route53` | DNS-01 | `region`, `profile`, `access_key_id`, `secret_access_key`, `session_token`, `max_retries` | ✅ сборка/тесты |
 | `code.sarnas.ru/xgate-modules/apikey` | auth-коннектор | `keys` (`id:secret[:roles]`), `header` (по умолчанию `X-API-Key`) | ✅ сборка/тесты |
 | `code.sarnas.ru/xgate-modules/discovery-file` | discovery | `path`, `interval` (по умолчанию `5s`) | ✅ сборка/тесты |
+| `code.sarnas.ru/xgate-modules/fingerprint` | HTTP middleware + слушатель | `enabled`, `ja4_header`, `ja3_header`, `source_header` | ✅ сборка/тесты, [описание](fingerprint.md) |
 | `code.sarnas.ru/xgate-modules/example` | HTTP middleware | `header` | шаблон |
 
 ## Как добавить модуль
 
 1. Скопировать `modules/example` (или `modules/dns/cloudflare` для DNS).
 2. Заменить module path в `go.mod` и имя в `Name()`.
-3. Реализовать `plugin.HTTPMiddleware`, `plugin.DNSProvider`, `plugin.AuthConnector`
-   или `plugin.DiscoveryProvider`.
+3. Реализовать `plugin.HTTPMiddleware`, `plugin.DNSProvider`, `plugin.AuthConnector`,
+   `plugin.DiscoveryProvider`, `plugin.ListenerWrapper`, `plugin.ConnContextHook`,
+   `plugin.PacketConnWrapper` или `plugin.HTTP3ConnContextHook`.
 4. Зарегистрировать в `init()`.
 5. Добавить модуль в `xgate.example.yaml`/CI и в эту таблицу.
 
