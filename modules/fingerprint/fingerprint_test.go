@@ -19,7 +19,7 @@ func (f *fakeConn) NetConn() net.Conn             { return f }
 
 func TestWrapSetsHeaders(t *testing.T) {
 	m := &module{enabled: true, header4: "X-JA4", header3: "X-JA3", headerS: "X-FP-Source", c4: "X-Ja4", c3: "X-Ja3", cs: "X-Fp-Source"}
-	ctx := context.WithValue(context.Background(), ctxKey{}, fp{ja4: "t13d15h2_abc_def", ja3: "deadbeef"})
+	ctx := context.WithValue(context.Background(), ctxKey{}, newFP("t13d15h2_abc_def", "deadbeef"))
 
 	var got4, got3, gotS string
 	h := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -77,7 +77,7 @@ func TestConnContextReadsFingerprint(t *testing.T) {
 
 func BenchmarkWrapWithFingerprint(b *testing.B) {
 	m := &module{enabled: true, header4: "X-JA4", header3: "X-JA3", headerS: "X-FP-Source", c4: "X-Ja4", c3: "X-Ja3", cs: "X-Fp-Source"}
-	ctx := context.WithValue(context.Background(), ctxKey{}, fp{ja4: "t13d15h2_abc_def", ja3: "deadbeef"})
+	ctx := context.WithValue(context.Background(), ctxKey{}, newFP("t13d15h2_abc_def", "deadbeef"))
 	h := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	req := httptest.NewRequest("GET", "/", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
@@ -111,9 +111,49 @@ func TestDefaultsWithoutConfig(t *testing.T) {
 	h := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.Header.Get("X-JA4")
 	}))
-	req := httptest.NewRequest("GET", "/", nil).WithContext(context.WithValue(context.Background(), ctxKey{}, fp{ja4: "x"}))
+	req := httptest.NewRequest("GET", "/", nil).WithContext(context.WithValue(context.Background(), ctxKey{}, newFP("x", "")))
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	if got != "x" {
 		t.Fatalf("заголовок по умолчанию = %q", got)
+	}
+}
+
+func BenchmarkWrapParallel(b *testing.B) {
+	m := newModule()
+	ctx := context.WithValue(context.Background(), ctxKey{}, newFP("t13d1516h2_8daaf6152771_02713d6af862", "deadbeef"))
+	h := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		req := httptest.NewRequest("GET", "/", nil).WithContext(ctx)
+		rec := httptest.NewRecorder()
+		for pb.Next() {
+			h.ServeHTTP(rec, req)
+		}
+	})
+}
+
+// TestConcurrentRequestsShareFingerprint доказывает, что срезы только читаются:
+// сотня горутин берёт одно соединение и пишет заголовки одновременно.
+// Запускать с -race — это и есть гарантия READ ONLY.
+func TestConcurrentRequestsShareFingerprint(t *testing.T) {
+	m := newModule()
+	ctx := context.WithValue(context.Background(), ctxKey{}, newFP("t13d1516h2_8daaf6152771_02713d6af862", "deadbeef"))
+	h := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-JA4"); got != "t13d1516h2_8daaf6152771_02713d6af862" {
+			t.Errorf("X-JA4 = %q", got)
+		}
+	}))
+
+	done := make(chan struct{})
+	for i := 0; i < 100; i++ {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			req := httptest.NewRequest("GET", "/", nil).WithContext(ctx)
+			h.ServeHTTP(httptest.NewRecorder(), req)
+		}()
+	}
+	for i := 0; i < 100; i++ {
+		<-done
 	}
 }

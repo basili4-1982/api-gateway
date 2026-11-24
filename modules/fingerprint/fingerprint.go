@@ -20,10 +20,34 @@ type ctxKey struct{}
 // sourceGateway — значение заголовка источника: отпечаток посчитал шлюз.
 const sourceGateway = "gateway"
 
-// fp — отпечатки одного соединения.
+// fp — отпечатки одного соединения вместе с готовыми значениями заголовков.
+//
+// READ ONLY. Срезы создаются один раз при рукопожатии и живут столько же,
+// сколько соединение; они общие для всех его запросов. Менять их нельзя —
+// ни здесь, ни в апстрим-модулях. Поэтому структура не отдаётся наружу и не
+// пулится: пул потребовал бы вернуть срез, пока на него ещё смотрят заголовки.
 type fp struct {
-	ja4 string
-	ja3 string
+	ja4  string
+	ja3  string
+	ja4v []string // len 1, значение ja4
+	ja3v []string // len 1, значение ja3
+	srcv []string // len 1, "gateway"
+}
+
+// newFP собирает значения заголовков заранее: на запросе не остаётся ни одной
+// аллокации. Пустые отпечатки дают пустые срезы, и заголовок не ставится.
+func newFP(ja4, ja3 string) fp {
+	f := fp{ja4: ja4, ja3: ja3}
+	if ja4 != "" {
+		f.ja4v = []string{ja4}
+	}
+	if ja3 != "" {
+		f.ja3v = []string{ja3}
+	}
+	if ja4 != "" || ja3 != "" {
+		f.srcv = []string{sourceGateway}
+	}
+	return f
 }
 
 type module struct {
@@ -87,7 +111,7 @@ func (m *module) ConnContext(ctx context.Context, c net.Conn) context.Context {
 	if ja4 == "" && ja3 == "" {
 		return ctx
 	}
-	return context.WithValue(ctx, ctxKey{}, fp{ja4: ja4, ja3: ja3})
+	return context.WithValue(ctx, ctxKey{}, newFP(ja4, ja3))
 }
 
 // Wrap проставляет заголовки. Заголовки от клиента вырезаются всегда: иначе
@@ -101,13 +125,15 @@ func (m *module) Wrap(next http.Handler) http.Handler {
 		delete(r.Header, m.cs)
 
 		if v, ok := r.Context().Value(ctxKey{}).(fp); ok {
-			if v.ja4 != "" {
-				r.Header[m.c4] = []string{v.ja4}
+			if len(v.ja4v) > 0 {
+				r.Header[m.c4] = v.ja4v
 			}
-			if v.ja3 != "" {
-				r.Header[m.c3] = []string{v.ja3}
+			if len(v.ja3v) > 0 {
+				r.Header[m.c3] = v.ja3v
 			}
-			r.Header[m.cs] = []string{sourceGateway}
+			if len(v.srcv) > 0 {
+				r.Header[m.cs] = v.srcv
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
