@@ -95,6 +95,7 @@ func (r *QUICRegistry) Get(addr string) (ja4, ja3 string, ok bool) {
 type QUICListener struct {
 	net.PacketConn
 	reg      *QUICRegistry
+	cache    *KeyCache
 	onReject func(error)
 	// parseInitial вынесен полем, чтобы тесты могли подменить разбор.
 	parseInitial func([]byte) ([]byte, []cryptoSegment, error)
@@ -108,7 +109,11 @@ func NewQUICListener(conn net.PacketConn, reg *QUICRegistry, onReject func(error
 	if onReject == nil {
 		onReject = func(error) {}
 	}
-	return &QUICListener{PacketConn: conn, reg: reg, onReject: onReject, parseInitial: ParseInitial}
+	l := &QUICListener{PacketConn: conn, reg: reg, cache: NewKeyCache(), onReject: onReject}
+	l.parseInitial = func(pkt []byte) ([]byte, []cryptoSegment, error) {
+		return ParseInitialCached(pkt, l.cache)
+	}
+	return l
 }
 
 // Registry отдаёт реестр, чтобы обработчики искали отпечаток по адресу.

@@ -17,6 +17,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
 )
 
 // initialSalt — соль из RFC 9001 §5.2. Все QUIC-клиенты используют её.
@@ -40,6 +41,94 @@ func hkdfExpandLabel(secret []byte, label string, length int) ([]byte, error) {
 	info = append(info, full...)
 	info = append(info, 0) // пустой контекст
 	return hkdf.Expand(sha256.New, secret, string(info), length)
+}
+
+// keyID — ключ кеша: DCID длиной до 20 байт, без выделения строки.
+type keyID struct {
+	n uint8
+	b [20]byte
+}
+
+// InitialKeys — готовые ключи одного DCID: AEAD, iv и шифр для header protection.
+type InitialKeys struct {
+	aead cipher.AEAD
+	iv   [12]byte
+	hp   cipher.Block
+}
+
+// KeyCache хранит ключи по DCID. Вывод ключей — самая дорогая часть разбора
+// (HKDF с четырьмя расширениями), а на соединение Initial-пакетов 1–2 с одним
+// и тем же DCID.
+type KeyCache struct {
+	mu  sync.Mutex
+	m   map[keyID]*InitialKeys
+	max int
+}
+
+// NewKeyCache создаёт кеш на 4096 соединений.
+func NewKeyCache() *KeyCache {
+	return &KeyCache{m: make(map[keyID]*InitialKeys, 64), max: 4096}
+}
+
+func keyOf(dcid []byte) keyID {
+	var id keyID
+	if len(dcid) > len(id.b) {
+		dcid = dcid[:len(id.b)]
+	}
+	id.n = uint8(len(dcid))
+	copy(id.b[:], dcid)
+	return id
+}
+
+// Get отдаёт ключи из кеша или выводит их и запоминает.
+func (c *KeyCache) Get(dcid []byte) (*InitialKeys, error) {
+	if c == nil {
+		return deriveInitial(dcid)
+	}
+	id := keyOf(dcid)
+	c.mu.Lock()
+	k, ok := c.m[id]
+	c.mu.Unlock()
+	if ok {
+		return k, nil
+	}
+	k, err := deriveInitial(dcid)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	if len(c.m) >= c.max {
+		for key := range c.m { // простое вытеснение: чистим один
+			delete(c.m, key)
+			break
+		}
+	}
+	c.m[id] = k
+	c.mu.Unlock()
+	return k, nil
+}
+
+// deriveInitial выводит ключи и собирает из них AEAD и шифр.
+func deriveInitial(dcid []byte) (*InitialKeys, error) {
+	key, iv, hp, err := initialKeys(dcid)
+	if err != nil {
+		return nil, err
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	hpBlock, err := aes.NewCipher(hp)
+	if err != nil {
+		return nil, err
+	}
+	k := &InitialKeys{aead: aead, hp: hpBlock}
+	copy(k.iv[:], iv)
+	return k, nil
 }
 
 // initialKeys выводит ключи Initial для направления клиента.
@@ -91,7 +180,12 @@ type cryptoSegment struct {
 
 // ParseInitial расшифровывает Initial-пакет и возвращает CRYPTO-сегменты.
 // Пакет не изменяется: защита снимается с копии заголовка.
-func ParseInitial(pkt []byte) (dcid []byte, segments []cryptoSegment, err error) {
+func ParseInitial(pkt []byte) ([]byte, []cryptoSegment, error) {
+	return ParseInitialCached(pkt, nil)
+}
+
+// ParseInitialCached — то же, но ключи берутся из кеша по DCID.
+func ParseInitialCached(pkt []byte, cache *KeyCache) (dcid []byte, segments []cryptoSegment, err error) {
 	if len(pkt) < 7 || pkt[0]&0x80 == 0 {
 		return nil, nil, ErrNotQUIC
 	}
@@ -133,16 +227,13 @@ func ParseInitial(pkt []byte) (dcid []byte, segments []cryptoSegment, err error)
 	if pnOffset+4+16 > len(pkt) {
 		return nil, nil, ErrNotQUIC
 	}
-	key, iv, hp, err := initialKeys(dcid)
+	keys, err := cache.Get(dcid)
 	if err != nil {
 		return nil, nil, err
 	}
-	block, err := aes.NewCipher(hp)
-	if err != nil {
-		return nil, nil, err
-	}
-	mask := make([]byte, 16)
-	block.Encrypt(mask, pkt[pnOffset+4:pnOffset+20])
+	var maskBuf [16]byte
+	mask := maskBuf[:]
+	keys.hp.Encrypt(mask, pkt[pnOffset+4:pnOffset+20])
 
 	first := pkt[0] ^ (mask[0] & 0x0f)
 	pnLen := int(first&0x03) + 1
@@ -157,16 +248,8 @@ func ParseInitial(pkt []byte) (dcid []byte, segments []cryptoSegment, err error)
 		pn = pn<<8 | uint64(header[pnOffset+i])
 	}
 
-	aeadBlock, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, nil, err
-	}
-	aead, err := cipher.NewGCM(aeadBlock)
-	if err != nil {
-		return nil, nil, err
-	}
-	nonce := make([]byte, len(iv))
-	copy(nonce, iv)
+	var nonce [12]byte
+	copy(nonce[:], keys.iv[:])
 	for i := 0; i < 8; i++ {
 		nonce[len(nonce)-1-i] ^= byte(pn >> (8 * i))
 	}
@@ -175,7 +258,7 @@ func ParseInitial(pkt []byte) (dcid []byte, segments []cryptoSegment, err error)
 		return nil, nil, ErrNotQUIC
 	}
 	payload := pkt[pnOffset+pnLen : end]
-	plain, err := aead.Open(nil, nonce, payload, header)
+	plain, err := keys.aead.Open(nil, nonce[:], payload, header)
 	if err != nil {
 		return nil, nil, fmt.Errorf("quic: расшифровка: %w", err)
 	}

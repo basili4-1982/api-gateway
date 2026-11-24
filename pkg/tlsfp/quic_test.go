@@ -117,3 +117,22 @@ func BenchmarkParseInitial(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkFullPath — весь путь, как в проде: разбор, сборка, ClientHello, JA4.
+func BenchmarkFullPath(b *testing.B) {
+	pkt, err := hex.DecodeString(rfcClientInitial)
+	if err != nil {
+		b.Fatal(err)
+	}
+	reg := NewQUICRegistry()
+	cache := NewKeyCache()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, segs, err := ParseInitialCached(pkt, cache)
+		if err != nil {
+			b.Fatal(err)
+		}
+		reg.Add("127.0.0.1:1", segs)
+	}
+}

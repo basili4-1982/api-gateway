@@ -3,9 +3,6 @@ package tlsfp
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"sort"
-	"strconv"
-	"strings"
 )
 
 // JA4 — отпечаток по формату FoxIO: устойчивее JA3, потому что сортирует
@@ -16,61 +13,70 @@ import (
 //	t — TLS, 13 — версия, d — SNI с доменом, 15 — шифров, 16 — расширений,
 //	h2 — ALPN. Дальше два sha256-префикса: по шифрам и по расширениям с кривыми.
 func (h Hello) JA4() string {
-	ciphers := make([]int, 0, len(h.Ciphers))
-	for _, c := range h.Ciphers {
-		if !isGREASE(c) {
-			ciphers = append(ciphers, int(c))
-		}
-	}
-	exts := make([]int, 0, len(h.Extensions))
-	for _, e := range h.Extensions {
-		if !isGREASE(e) {
-			exts = append(exts, int(e))
-		}
-	}
-	sort.Ints(ciphers)
-	sort.Ints(exts)
+	// Списки сортируются и очищаются от GREASE: в буферах на стеке, без
+	// промежуточных срезов и строк.
+	ciphers := h.sortedNoGREASE16(h.Ciphers)
+	exts := h.sortedNoGREASE16(h.Extensions)
+	curves := h.sortedNoGREASE16(h.Curves)
 
-	// Версия: сначала supported_versions (0x0304 — TLS 1.3), иначе legacy.
+	var cbuf [1024]byte
+	var ebuf [1024]byte
+	cs := appendUintList(cbuf[:0], ciphers, ',')
+	es := appendUintList(ebuf[:0], exts, ',')
+	es = append(es, '_')
+	es = appendUintList(es, curves, ',')
+
+	cSum := sha256.Sum256(cs)
+	eSum := sha256.Sum256(es)
+
+	var out [64]byte
+	b := out[:0]
+	b = append(b, 't')
 	version := "12"
 	for _, e := range h.Extensions {
 		if e == 43 && h.supportedVersion == 0x0304 {
 			version = "13"
 		}
 	}
-
-	sni := "i" // без SNI
+	b = append(b, version...)
 	if h.ServerName != "" {
-		sni = "d"
+		b = append(b, 'd')
+	} else {
+		b = append(b, 'i')
 	}
-
-	alpn := "00"
+	b = appendUint(b, len(ciphers))
+	b = appendUint(b, len(exts))
 	if len(h.ALPN) > 0 {
-		alpn = h.ALPN[0]
-		if len(alpn) > 2 {
-			alpn = alpn[:2]
+		a := h.ALPN[0]
+		if len(a) > 2 {
+			a = a[:2]
 		}
+		b = append(b, a...)
+	} else {
+		b = append(b, '0', '0')
 	}
-
-	prefix := "t" + version + sni +
-		strconv.Itoa(len(ciphers)) + strconv.Itoa(len(exts)) + alpn
-
-	cipherPart := sha256Hex(joinInts(ciphers, ","))
-	// Расширения в JA4 идут вместе с кривыми: так отпечаток различает
-	// поддержку групп, не дублируя отдельное поле.
-	extPart := sha256Hex(joinInts(exts, ",") + "_" + joinInts(h.sortedCurves(), ","))
-
-	return prefix + "_" + cipherPart + "_" + extPart
+	b = append(b, '_')
+	b = hex.AppendEncode(b, cSum[:6])
+	b = append(b, '_')
+	b = hex.AppendEncode(b, eSum[:6])
+	return string(b)
 }
 
-func (h Hello) sortedCurves() []int {
-	out := make([]int, 0, len(h.Curves))
-	for _, c := range h.Curves {
-		if !isGREASE(c) {
-			out = append(out, int(c))
+// sortedNoGREASE16 копирует значения, вырезает GREASE и сортирует.
+func (h Hello) sortedNoGREASE16(vals []uint16) []uint16 {
+	out := make([]uint16, 0, len(vals))
+	for _, v := range vals {
+		if !isGREASE(v) {
+			out = append(out, v)
 		}
 	}
-	sort.Ints(out)
+	// Сортировка вставками: список короткий, а sort.Slice тянет reflect
+	// и аллоцирует обёртку на каждый вызов.
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j] < out[j-1]; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
+	}
 	return out
 }
 
@@ -78,17 +84,4 @@ func (h Hello) sortedCurves() []int {
 // намеренно, чтобы сломать наивные парсеры. В отпечаток они не входят.
 func isGREASE(v uint16) bool {
 	return v&0x0f0f == 0x0a0a && byte(v>>8) == byte(v)
-}
-
-func joinInts(vals []int, sep string) string {
-	parts := make([]string, 0, len(vals))
-	for _, v := range vals {
-		parts = append(parts, strconv.Itoa(v))
-	}
-	return strings.Join(parts, sep)
-}
-
-func sha256Hex(s string) string {
-	sum := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(sum[:])[:12]
 }

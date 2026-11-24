@@ -9,8 +9,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"strconv"
-	"strings"
 )
 
 // Hello — разобранная часть ClientHello, нужная для отпечатка.
@@ -68,6 +66,7 @@ func ParseClientHello(b []byte) (Hello, error) {
 	if len(p) < csLen+1 {
 		return h, ErrShortHello
 	}
+	h.Ciphers = make([]uint16, 0, csLen/2)
 	for i := 0; i+1 < csLen; i += 2 {
 		h.Ciphers = append(h.Ciphers, binary.BigEndian.Uint16(p[i:i+2]))
 	}
@@ -87,6 +86,7 @@ func ParseClientHello(b []byte) (Hello, error) {
 	if len(p) < extLen {
 		return h, ErrShortHello
 	}
+	h.Extensions = make([]uint16, 0, 16)
 	for len(p) >= 4 {
 		typ := binary.BigEndian.Uint16(p[0:2])
 		l := int(binary.BigEndian.Uint16(p[2:4]))
@@ -150,25 +150,25 @@ func ParseClientHello(b []byte) (Hello, error) {
 // String собирает строку JA3 до хеширования. Формат фиксирован: пять полей
 // через запятую, значения через дефис.
 func (h Hello) String() string {
-	ints := func(vals []uint16) string {
-		parts := make([]string, 0, len(vals))
-		for _, v := range vals {
-			parts = append(parts, strconv.Itoa(int(v)))
+	var buf [2048]byte
+	b := buf[:0]
+	b = appendUint(b, int(h.Version))
+	b = append(b, ',')
+	b = appendUintList(b, h.Ciphers, '-')
+	b = append(b, ',')
+	b = appendUintList(b, h.Extensions, '-')
+	b = append(b, ',')
+	b = appendUintList(b, h.Curves, '-')
+	b = append(b, ',')
+	for i, f := range h.Formats {
+		if i > 0 {
+			b = append(b, '-')
 		}
-		return strings.Join(parts, "-")
+		b = appendUint(b, int(f))
 	}
-	bytes := func(vals []uint8) string {
-		parts := make([]string, 0, len(vals))
-		for _, v := range vals {
-			parts = append(parts, strconv.Itoa(int(v)))
-		}
-		return strings.Join(parts, "-")
-	}
-	return strconv.Itoa(int(h.Version)) + "," + ints(h.Ciphers) + "," +
-		ints(h.Extensions) + "," + ints(h.Curves) + "," + bytes(h.Formats)
+	return string(b)
 }
 
-// JA3 возвращает md5-хеш отпечатка.
 func JA3(b []byte) (string, error) {
 	h, err := ParseClientHello(b)
 	if err != nil {
