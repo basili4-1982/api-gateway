@@ -225,11 +225,16 @@ func (mp *MultiProxy) startTLS() error {
 		if err != nil {
 			return fmt.Errorf("HTTP/3 listen: %w", err)
 		}
+		// Модули могут прочитать Initial-пакет до QUIC; если никто не просит,
+		// соединение уходит как есть.
+		var packetConn net.PacketConn = plugin.WrapPacketConn(conn)
+		h3Server.ConnContext = plugin.HTTP3ConnContext
 		mp.http3Server = h3Server
 		mp.http3Conn = conn
+		_ = packetConn
 		publicHandler = altSvcMiddleware(publicHandler, h3Server)
 		go func() {
-			if err := h3Server.Serve(conn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := h3Server.Serve(packetConn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				mp.logger.Error("HTTP/3 server error", zap.Error(err))
 			}
 		}()

@@ -14,6 +14,8 @@ import (
 
 	"code.sarnas.ru/api-gateway/pkg/plugin"
 	"code.sarnas.ru/api-gateway/pkg/tlsfp"
+
+	"github.com/quic-go/quic-go"
 )
 
 type ctxKey struct{}
@@ -60,6 +62,9 @@ func (h *holder) values() *fpValues {
 
 type module struct {
 	enabled bool
+	// quic — отпечатки HTTP/3 по адресу клиента: снимаются с Initial-пакета
+	// до того, как quic-go его разберёт.
+	quic    *tlsfp.QUICRegistry
 	header4 string
 	header3 string
 	headerS string
@@ -87,6 +92,7 @@ func (m *module) Configure(cfg map[string]string) error {
 		m.headerS = "X-FP-Source"
 	}
 	m.enabled = cfg["enabled"] != "false"
+	m.quic = tlsfp.NewQUICRegistry()
 	m.c4 = http.CanonicalHeaderKey(m.header4)
 	m.c3 = http.CanonicalHeaderKey(m.header3)
 	m.cs = http.CanonicalHeaderKey(m.headerS)
@@ -99,6 +105,34 @@ func (m *module) WrapListener(ln net.Listener) net.Listener {
 		return ln
 	}
 	return tlsfp.NewListener(ln, nil)
+}
+
+// WrapPacketConn оборачивает UDP: на Initial-пакете считается отпечаток,
+// сам пакет уходит дальше без изменений.
+func (m *module) WrapPacketConn(c net.PacketConn) net.PacketConn {
+	if !m.enabled {
+		return c
+	}
+	if m.quic == nil {
+		m.quic = tlsfp.NewQUICRegistry()
+	}
+	return tlsfp.NewQUICListener(c, m.quic, nil)
+}
+
+// HTTP3ConnContext достаёт отпечаток, снятый с Initial-пакета, по адресу
+// клиента. В QUIC нет рукопожатия TLS в том виде, в каком оно есть в TCP,
+// поэтому ключ — адрес, а не соединение.
+func (m *module) HTTP3ConnContext(ctx context.Context, c *quic.Conn) context.Context {
+	if !m.enabled || m.quic == nil || c == nil {
+		return ctx
+	}
+	ja4, ja3, ok := m.quic.Get(c.RemoteAddr().String())
+	if !ok {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKey{}, &holder{v: fpValues{
+		ja4v: []string{ja4}, ja3v: []string{ja3}, srcv: []string{sourceGateway},
+	}})
 }
 
 // ConnContext кладёт отпечаток в контекст соединения: один раз на соединение,
@@ -150,6 +184,7 @@ func (m *module) Wrap(next http.Handler) http.Handler {
 // plugins.fingerprint. Пустые имена превратились бы в запись заголовка "".
 func newModule() *module {
 	m := &module{enabled: true, header4: "X-JA4", header3: "X-JA3", headerS: "X-FP-Source"}
+	m.quic = tlsfp.NewQUICRegistry()
 	m.c4 = http.CanonicalHeaderKey(m.header4)
 	m.c3 = http.CanonicalHeaderKey(m.header3)
 	m.cs = http.CanonicalHeaderKey(m.headerS)

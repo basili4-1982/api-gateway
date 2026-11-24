@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net"
 	"sync"
+
+	"github.com/quic-go/quic-go"
 )
 
 // Module describes an optional gateway module.
@@ -157,6 +159,39 @@ func WrapListener(ln net.Listener) net.Listener {
 func ConnContext(ctx context.Context, c net.Conn) context.Context {
 	for _, h := range ConnContextHooks() {
 		ctx = h.ConnContext(ctx, c)
+	}
+	return ctx
+}
+
+// PacketConnWrapper — модуль, которому нужны датаграммы до QUIC. Реализация
+// обязана возвращать пакет без изменений, иначе сломается весь HTTP/3.
+type PacketConnWrapper interface {
+	Module
+	WrapPacketConn(net.PacketConn) net.PacketConn
+}
+
+// HTTP3ConnContextHook — модуль, которому нужен контекст QUIC-соединения.
+type HTTP3ConnContextHook interface {
+	Module
+	HTTP3ConnContext(ctx context.Context, c *quic.Conn) context.Context
+}
+
+// WrapPacketConn прогоняет UDP через модули.
+func WrapPacketConn(c net.PacketConn) net.PacketConn {
+	for _, m := range Modules() {
+		if w, ok := m.(PacketConnWrapper); ok {
+			c = w.WrapPacketConn(c)
+		}
+	}
+	return c
+}
+
+// HTTP3ConnContext прогоняет контекст QUIC-соединения через модули.
+func HTTP3ConnContext(ctx context.Context, c *quic.Conn) context.Context {
+	for _, m := range Modules() {
+		if h, ok := m.(HTTP3ConnContextHook); ok {
+			ctx = h.HTTP3ConnContext(ctx, c)
+		}
 	}
 	return ctx
 }
