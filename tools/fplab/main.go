@@ -28,6 +28,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"time"
@@ -38,13 +39,31 @@ import (
 
 func main() {
 	dir := flag.String("dir", ".", "каталог для самоподписанного сертификата")
+	mode := flag.String("mode", "both", "fp | plain | both — какие серверы поднимать")
+	pprofAddr := flag.String("pprof", "127.0.0.1:6060", "адрес pprof (пусто — выключить)")
 	flag.Parse()
+
+	if *pprofAddr != "" {
+		go func() {
+			admin := &http.Server{Addr: *pprofAddr, Handler: http.DefaultServeMux, ReadHeaderTimeout: 5 * time.Second}
+			log.Println("pprof: http://" + *pprofAddr + "/debug/pprof/")
+			if err := admin.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("pprof: %v", err)
+			}
+		}()
+	}
 
 	cert, err := selfSigned(*dir)
 	if err != nil {
 		log.Fatalf("сертификат: %v", err)
 	}
 	tlsCfg := &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
+
+	if *mode == "fp" || *mode == "both" {
+		// pprof-ручки живут в DefaultServeMux, чтобы не раздувать основной.
+	} else {
+		_ = *mode
+	}
 
 	mux := http.NewServeMux()
 	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -76,23 +95,31 @@ func main() {
 	if err != nil {
 		log.Fatalf("listen 8443: %v", err)
 	}
-	go func() {
-		log.Println("с отпечатком: https://127.0.0.1:8443")
-		if err := withFP.Serve(tls.NewListener(fp.WrapListener(lnFP), tlsCfg)); err != nil && err != http.ErrServerClosed {
-			log.Fatal(err)
-		}
-	}()
+	if *mode == "fp" || *mode == "both" {
+		go func() {
+			log.Println("с отпечатком: https://127.0.0.1:8443")
+			if err := withFP.Serve(tls.NewListener(fp.WrapListener(lnFP), tlsCfg)); err != nil && err != http.ErrServerClosed {
+				log.Fatal(err)
+			}
+		}()
+	} else {
+		_ = lnFP.Close()
+	}
 
 	lnPlain, err := net.Listen("tcp", plain.Addr)
 	if err != nil {
 		log.Fatalf("listen 8444: %v", err)
 	}
-	go func() {
-		log.Println("без отпечатка: https://127.0.0.1:8444")
-		if err := plain.Serve(tls.NewListener(lnPlain, tlsCfg)); err != nil && err != http.ErrServerClosed {
-			log.Fatal(err)
-		}
-	}()
+	if *mode == "plain" || *mode == "both" {
+		go func() {
+			log.Println("без отпечатка: https://127.0.0.1:8444")
+			if err := plain.Serve(tls.NewListener(lnPlain, tlsCfg)); err != nil && err != http.ErrServerClosed {
+				log.Fatal(err)
+			}
+		}()
+	} else {
+		_ = lnPlain.Close()
+	}
 
 	select {}
 }
