@@ -34,6 +34,7 @@ import (
 	"code.sarnas.ru/api-gateway/internal/jwtutil"
 	"code.sarnas.ru/api-gateway/internal/permissions"
 	"code.sarnas.ru/api-gateway/pkg/plugin"
+	"code.sarnas.ru/api-gateway/pkg/tlsfp"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -210,7 +211,9 @@ type MultiProxy struct {
 	identity           *identity.Manager
 	publisher          *Publisher
 	trustedProxies     []*net.IPNet
-	certmagicStop      func()
+	// ja3 — отпечатки TLS-клиентов по адресу соединения; заполняется TLS-листенером.
+	ja3           atomic.Pointer[tlsfp.Registry]
+	certmagicStop func()
 	// middleware оборачивает публичный обработчик; задаётся до Start.
 	middleware func(http.Handler) http.Handler
 	// authConnectors — внешние аутентификаторы по именам модулей.
@@ -288,6 +291,7 @@ func NewMultiProxy(cfg *config.Config, logger *zap.Logger) (*MultiProxy, error) 
 
 	// Строим middleware цепочку
 	handler := mp.proxyHandler()
+	handler = ja3HeaderMiddleware(mp)(handler)
 	handler = corsPreflightMiddleware(mp, mp.metrics)(handler)
 	handler = spaStaticMiddleware(mp)(handler)
 	handler = globalRateLimitMiddleware(mp.globalLimiter, mp.metrics)(handler)
