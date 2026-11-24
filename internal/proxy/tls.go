@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 
 	"code.sarnas.ru/api-gateway/internal/config"
+	"code.sarnas.ru/api-gateway/pkg/tlsfp"
 )
 
 // letsEncryptStagingDirectory — ACME directory тестового CA Let's Encrypt.
@@ -293,11 +294,23 @@ func (mp *MultiProxy) startTLS() error {
 		}
 	}()
 
+	// Слушаем сами, чтобы прочитать ClientHello до TLS: так считается JA3.
+	// Без этого отпечатка шлюз не может отличить браузер от библиотеки.
+	httpsLn, err := net.Listen("tcp", tlsServer.Addr)
+	if err != nil {
+		return fmt.Errorf("HTTPS listen: %w", err)
+	}
+	peek := tlsfp.NewListener(httpsLn, tlsfp.NewRegistry(), func(err error) {
+		mp.logger.Debug("TLS fingerprint skipped", zap.Error(err))
+	})
+	mp.withRegistry(peek.Registry())
+
 	go func() {
 		mp.logger.Info("Starting HTTPS server",
 			zap.Int("port", tlsCfg.Port),
+			zap.Bool("ja3", true),
 		)
-		if err := tlsServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+		if err := tlsServer.Serve(tls.NewListener(peek, serverTLS)); err != nil && err != http.ErrServerClosed {
 			errCh <- fmt.Errorf("HTTPS server error: %w", err)
 		}
 	}()
