@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http"
+	"sync"
 
 	"code.sarnas.ru/api-gateway/pkg/plugin"
 	"code.sarnas.ru/api-gateway/pkg/tlsfp"
@@ -20,34 +21,41 @@ type ctxKey struct{}
 // sourceGateway — значение заголовка источника: отпечаток посчитал шлюз.
 const sourceGateway = "gateway"
 
-// fp — отпечатки одного соединения вместе с готовыми значениями заголовков.
-//
-// READ ONLY. Срезы создаются один раз при рукопожатии и живут столько же,
-// сколько соединение; они общие для всех его запросов. Менять их нельзя —
-// ни здесь, ни в апстрим-модулях. Поэтому структура не отдаётся наружу и не
-// пулится: пул потребовал бы вернуть срез, пока на него ещё смотрят заголовки.
-type fp struct {
-	ja4  string
-	ja3  string
-	ja4v []string // len 1, значение ja4
-	ja3v []string // len 1, значение ja3
-	srcv []string // len 1, "gateway"
+// fpValues — готовые значения заголовков. READ ONLY: создаются один раз на
+// соединение и только читаются дальше, поэтому не пулятся — пул потребовал бы
+// вернуть срез, пока на него ещё смотрят заголовки.
+type fpValues struct {
+	ja4v []string
+	ja3v []string
+	srcv []string
 }
 
-// newFP собирает значения заголовков заранее: на запросе не остаётся ни одной
-// аллокации. Пустые отпечатки дают пустые срезы, и заголовок не ставится.
-func newFP(ja4, ja3 string) fp {
-	f := fp{ja4: ja4, ja3: ja3}
-	if ja4 != "" {
-		f.ja4v = []string{ja4}
-	}
-	if ja3 != "" {
-		f.ja3v = []string{ja3}
-	}
-	if ja4 != "" || ja3 != "" {
-		f.srcv = []string{sourceGateway}
-	}
-	return f
+// holder живёт в контексте соединения. Отпечаток появляется после первого
+// чтения ClientHello, поэтому срезы собираются лениво — при первом запросе,
+// когда рукопожатие уже прошло.
+type holder struct {
+	f    tlsfp.Fingerprinted
+	once sync.Once
+	v    fpValues
+}
+
+func (h *holder) values() *fpValues {
+	h.once.Do(func() {
+		if h.f == nil {
+			return
+		}
+		ja4, ja3 := h.f.Fingerprint()
+		if ja4 != "" {
+			h.v.ja4v = []string{ja4}
+		}
+		if ja3 != "" {
+			h.v.ja3v = []string{ja3}
+		}
+		if ja4 != "" || ja3 != "" {
+			h.v.srcv = []string{sourceGateway}
+		}
+	})
+	return &h.v
 }
 
 type module struct {
@@ -107,11 +115,7 @@ func (m *module) ConnContext(ctx context.Context, c net.Conn) context.Context {
 	if !ok {
 		return ctx
 	}
-	ja4, ja3 := f.Fingerprint()
-	if ja4 == "" && ja3 == "" {
-		return ctx
-	}
-	return context.WithValue(ctx, ctxKey{}, newFP(ja4, ja3))
+	return context.WithValue(ctx, ctxKey{}, &holder{f: f})
 }
 
 // Wrap проставляет заголовки. Заголовки от клиента вырезаются всегда: иначе
@@ -124,15 +128,18 @@ func (m *module) Wrap(next http.Handler) http.Handler {
 		delete(r.Header, m.c3)
 		delete(r.Header, m.cs)
 
-		if v, ok := r.Context().Value(ctxKey{}).(fp); ok {
-			if len(v.ja4v) > 0 {
-				r.Header[m.c4] = v.ja4v
-			}
-			if len(v.ja3v) > 0 {
-				r.Header[m.c3] = v.ja3v
-			}
-			if len(v.srcv) > 0 {
-				r.Header[m.cs] = v.srcv
+		if h, ok := r.Context().Value(ctxKey{}).(*holder); ok {
+			// values() один раз на соединение; дальше — только чтение.
+			if v := h.values(); len(v.ja4v) > 0 || len(v.ja3v) > 0 {
+				if len(v.ja4v) > 0 {
+					r.Header[m.c4] = v.ja4v
+				}
+				if len(v.ja3v) > 0 {
+					r.Header[m.c3] = v.ja3v
+				}
+				if len(v.srcv) > 0 {
+					r.Header[m.cs] = v.srcv
+				}
 			}
 		}
 		next.ServeHTTP(w, r)
@@ -150,3 +157,7 @@ func newModule() *module {
 }
 
 func init() { plugin.Register(newModule()) }
+
+// NewModule отдаёт настроенный модуль вне init: нужен стендам и тестам,
+// которые собирают сервер руками.
+func NewModule() *module { return newModule() }

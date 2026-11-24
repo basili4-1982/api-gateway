@@ -19,7 +19,7 @@ func (f *fakeConn) NetConn() net.Conn             { return f }
 
 func TestWrapSetsHeaders(t *testing.T) {
 	m := &module{enabled: true, header4: "X-JA4", header3: "X-JA3", headerS: "X-FP-Source", c4: "X-Ja4", c3: "X-Ja3", cs: "X-Fp-Source"}
-	ctx := context.WithValue(context.Background(), ctxKey{}, newFP("t13d15h2_abc_def", "deadbeef"))
+	ctx := context.WithValue(context.Background(), ctxKey{}, &holder{v: fpValues{ja4v: []string{"t13d15h2_abc_def"}, ja3v: []string{"deadbeef"}, srcv: []string{"gateway"}}})
 
 	var got4, got3, gotS string
 	h := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -77,7 +77,7 @@ func TestConnContextReadsFingerprint(t *testing.T) {
 
 func BenchmarkWrapWithFingerprint(b *testing.B) {
 	m := &module{enabled: true, header4: "X-JA4", header3: "X-JA3", headerS: "X-FP-Source", c4: "X-Ja4", c3: "X-Ja3", cs: "X-Fp-Source"}
-	ctx := context.WithValue(context.Background(), ctxKey{}, newFP("t13d15h2_abc_def", "deadbeef"))
+	ctx := context.WithValue(context.Background(), ctxKey{}, &holder{v: fpValues{ja4v: []string{"t13d15h2_abc_def"}, ja3v: []string{"deadbeef"}, srcv: []string{"gateway"}}})
 	h := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	req := httptest.NewRequest("GET", "/", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
@@ -111,7 +111,7 @@ func TestDefaultsWithoutConfig(t *testing.T) {
 	h := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.Header.Get("X-JA4")
 	}))
-	req := httptest.NewRequest("GET", "/", nil).WithContext(context.WithValue(context.Background(), ctxKey{}, newFP("x", "")))
+	req := httptest.NewRequest("GET", "/", nil).WithContext(context.WithValue(context.Background(), ctxKey{}, &holder{v: fpValues{ja4v: []string{"x"}, srcv: []string{"gateway"}}}))
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	if got != "x" {
 		t.Fatalf("заголовок по умолчанию = %q", got)
@@ -120,7 +120,7 @@ func TestDefaultsWithoutConfig(t *testing.T) {
 
 func BenchmarkWrapParallel(b *testing.B) {
 	m := newModule()
-	ctx := context.WithValue(context.Background(), ctxKey{}, newFP("t13d1516h2_8daaf6152771_02713d6af862", "deadbeef"))
+	ctx := context.WithValue(context.Background(), ctxKey{}, &holder{v: fpValues{ja4v: []string{"t13d1516h2_8daaf6152771_02713d6af862"}, ja3v: []string{"deadbeef"}, srcv: []string{"gateway"}}})
 	h := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 
 	b.ReportAllocs()
@@ -138,7 +138,7 @@ func BenchmarkWrapParallel(b *testing.B) {
 // Запускать с -race — это и есть гарантия READ ONLY.
 func TestConcurrentRequestsShareFingerprint(t *testing.T) {
 	m := newModule()
-	ctx := context.WithValue(context.Background(), ctxKey{}, newFP("t13d1516h2_8daaf6152771_02713d6af862", "deadbeef"))
+	ctx := context.WithValue(context.Background(), ctxKey{}, &holder{v: fpValues{ja4v: []string{"t13d1516h2_8daaf6152771_02713d6af862"}, ja3v: []string{"deadbeef"}, srcv: []string{"gateway"}}})
 	h := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("X-JA4"); got != "t13d1516h2_8daaf6152771_02713d6af862" {
 			t.Errorf("X-JA4 = %q", got)
