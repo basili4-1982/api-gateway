@@ -35,6 +35,8 @@ import (
 
 	"code.sarnas.ru/api-gateway/pkg/plugin"
 	"code.sarnas.ru/xgate-modules/fingerprint"
+
+	"github.com/quic-go/quic-go/http3"
 )
 
 func main() {
@@ -119,6 +121,44 @@ func main() {
 		}()
 	} else {
 		_ = lnPlain.Close()
+	}
+
+	// HTTP/3 без модуля — базовая линия для сравнения.
+	if *mode == "plain" || *mode == "both" {
+		plainH3ln, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8446})
+		if err != nil {
+			log.Fatalf("listen 8446/udp: %v", err)
+		}
+		plainTLS := tlsCfg.Clone()
+		plainTLS.NextProtos = []string{"h3"}
+		plainH3 := &http3.Server{TLSConfig: plainTLS, Handler: ok}
+		go func() {
+			log.Println("HTTP/3 без отпечатка: https://127.0.0.1:8446")
+			if err := plainH3.Serve(plainH3ln); err != nil && err != http.ErrServerClosed {
+				log.Printf("http3 plain: %v", err)
+			}
+		}()
+	}
+
+	// HTTP/3 на том же модуле: отпечаток снимается с Initial-пакета.
+	if *mode == "fp" || *mode == "both" {
+		h3ln, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 8445})
+		if err != nil {
+			log.Fatalf("listen 8445/udp: %v", err)
+		}
+		h3TLS := tlsCfg.Clone()
+		h3TLS.NextProtos = []string{"h3"}
+		h3 := &http3.Server{
+			TLSConfig:   h3TLS,
+			Handler:     fp.Wrap(ok),
+			ConnContext: fp.HTTP3ConnContext,
+		}
+		go func() {
+			log.Println("HTTP/3 с отпечатком: https://127.0.0.1:8445")
+			if err := h3.Serve(fp.WrapPacketConn(h3ln)); err != nil && err != http.ErrServerClosed {
+				log.Printf("http3: %v", err)
+			}
+		}()
 	}
 
 	select {}

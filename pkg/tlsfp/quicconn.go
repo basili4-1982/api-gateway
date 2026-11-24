@@ -116,6 +116,25 @@ func NewQUICListener(conn net.PacketConn, reg *QUICRegistry, onReject func(error
 	return l
 }
 
+// SetReadBuffer пробрасывает настройку буфера в настоящий сокет: quic-go
+// ищет метод на том PacketConn, который ему дали. Без проксирования он не
+// может выставить буферы (нужно мегабайты вместо сотен килобайт) и теряет
+// пакеты под нагрузкой.
+func (l *QUICListener) SetReadBuffer(n int) error {
+	if c, ok := l.PacketConn.(interface{ SetReadBuffer(int) error }); ok {
+		return c.SetReadBuffer(n)
+	}
+	return nil
+}
+
+// SetWriteBuffer — то же для отправки.
+func (l *QUICListener) SetWriteBuffer(n int) error {
+	if c, ok := l.PacketConn.(interface{ SetWriteBuffer(int) error }); ok {
+		return c.SetWriteBuffer(n)
+	}
+	return nil
+}
+
 // Registry отдаёт реестр, чтобы обработчики искали отпечаток по адресу.
 func (l *QUICListener) Registry() *QUICRegistry { return l.reg }
 
