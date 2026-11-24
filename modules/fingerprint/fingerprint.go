@@ -113,4 +113,14 @@ func (m *module) Wrap(next http.Handler) http.Handler {
 	})
 }
 
-func init() { plugin.Register(&module{enabled: true}) }
+// newModule задаёт дефолты до Configure: модуль обязан работать и без секции
+// plugins.fingerprint. Пустые имена превратились бы в запись заголовка "".
+func newModule() *module {
+	m := &module{enabled: true, header4: "X-JA4", header3: "X-JA3", headerS: "X-FP-Source"}
+	m.c4 = http.CanonicalHeaderKey(m.header4)
+	m.c3 = http.CanonicalHeaderKey(m.header3)
+	m.cs = http.CanonicalHeaderKey(m.headerS)
+	return m
+}
+
+func init() { plugin.Register(newModule()) }

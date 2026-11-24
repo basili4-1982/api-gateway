@@ -101,3 +101,19 @@ func BenchmarkWrapWithoutFingerprint(b *testing.B) {
 		h.ServeHTTP(rec, req)
 	}
 }
+
+func TestDefaultsWithoutConfig(t *testing.T) {
+	m := newModule()
+	if m.c4 != "X-Ja4" || m.c3 != "X-Ja3" || m.cs != "X-Fp-Source" {
+		t.Fatalf("канонические имена не заданы: %q %q %q", m.c4, m.c3, m.cs)
+	}
+	var got string
+	h := m.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("X-JA4")
+	}))
+	req := httptest.NewRequest("GET", "/", nil).WithContext(context.WithValue(context.Background(), ctxKey{}, fp{ja4: "x"}))
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if got != "x" {
+		t.Fatalf("заголовок по умолчанию = %q", got)
+	}
+}
