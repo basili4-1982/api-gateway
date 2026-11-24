@@ -2,115 +2,123 @@ package tlsfp
 
 import (
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
-// Registry хранит отпечатки соединений до того, как запрос дойдёт до обработчика.
-// Ключ — адрес соединения (RemoteAddr до NAT), значение — JA3.
-type Registry struct {
-	mu      sync.RWMutex
-	byAddr  map[string]string
-	maxSize int
+// Fingerprinted — соединение, которое умеет отдать отпечаток.
+//
+// Значения появляются после первого чтения ClientHello: TLS-сервер читает его
+// сам в своей горутине, и к моменту, когда запрос дошёл до обработчика, они уже
+// готовы. Метод безопасен для параллельных вызовов.
+type Fingerprinted interface {
+	Fingerprint() (ja4, ja3 string)
 }
 
-// NewRegistry создаёт реестр на 100 тысяч соединений: больше на одном узле
-// одновременно не держим, старые вытесняются.
-func NewRegistry() *Registry {
-	return &Registry{byAddr: make(map[string]string, 1024), maxSize: 100_000}
-}
-
-// Set записывает отпечаток.
-func (r *Registry) Set(addr, ja3 string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if len(r.byAddr) >= r.maxSize {
-		// Дешёвое вытеснение: чистим половину. Точность не критична — запрос
-		// приходит сразу после рукопожатия, когда запись ещё свежая.
-		n := 0
-		for k := range r.byAddr {
-			delete(r.byAddr, k)
-			if n++; n >= r.maxSize/2 {
-				break
-			}
-		}
-	}
-	r.byAddr[addr] = ja3
-}
-
-// Get отдаёт отпечаток и удаляет запись: следующий запрос в том же
-// keep-alive соединении уже не требует рукопожатия.
-func (r *Registry) Get(addr string) string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	v := r.byAddr[addr]
-	delete(r.byAddr, addr)
-	return v
-}
-
-// PeekListener читает ClientHello до передачи соединения TLS-серверу.
+// PeekListener оборачивает слушатель, но ничего не читает в Accept: иначе
+// accept-loop блокируется до первого байта клиента. Разбор идёт лениво, при
+// первом Read, который делает уже TLS-сервер в отдельной горутине.
 type PeekListener struct {
 	net.Listener
-	reg      *Registry
 	readTTL  time.Duration
 	onReject func(error)
 }
 
 // NewListener оборачивает слушатель. onReject может быть nil.
-func NewListener(l net.Listener, reg *Registry, onReject func(error)) *PeekListener {
-	if reg == nil {
-		reg = NewRegistry()
-	}
+func NewListener(l net.Listener, onReject func(error)) *PeekListener {
 	if onReject == nil {
 		onReject = func(error) {}
 	}
-	return &PeekListener{Listener: l, reg: reg, readTTL: 5 * time.Second, onReject: onReject}
+	return &PeekListener{Listener: l, readTTL: 5 * time.Second, onReject: onReject}
 }
 
-// Registry отдаёт реестр, чтобы обработчики могли читать отпечаток.
-func (l *PeekListener) Registry() *Registry { return l.reg }
-
-// Accept читает запись ClientHello, считает отпечаток и возвращает соединение,
-// у которого эти байты уже «прочитаны» — TLS-сервер получит их без потерь.
+// Accept отдаёт соединение сразу, без чтения.
 func (l *PeekListener) Accept() (net.Conn, error) {
 	c, err := l.Listener.Accept()
 	if err != nil {
 		return nil, err
 	}
+	return &peekConn{Conn: c, ttl: l.readTTL, onReject: l.onReject}, nil
+}
 
-	_ = c.SetReadDeadline(time.Now().Add(l.readTTL))
-	head := make([]byte, 5)
-	if _, err := io.ReadFull(c, head); err != nil {
-		l.onReject(err)
-		_ = c.Close()
-		return nil, err
-	}
-	recLen := int(binary.BigEndian.Uint16(head[3:5]))
-	// Запись больше 64 КБ не бывает: защищаемся от мусора в первых байтах.
-	if recLen <= 0 || recLen > 1<<16 {
-		l.onReject(errBadRecord)
-		_ = c.Close()
-		return nil, errBadRecord
-	}
-	rest := make([]byte, recLen)
-	if _, err := io.ReadFull(c, rest); err != nil {
-		l.onReject(err)
-		_ = c.Close()
-		return nil, err
-	}
-	full := make([]byte, 0, len(head)+len(rest))
-	full = append(full, head...)
-	full = append(full, rest...)
+// peekConn при первом Read забирает ClientHello целиком, считает отпечаток и
+// отдаёт байты дальше без потерь.
+type peekConn struct {
+	net.Conn
+	ttl      time.Duration
+	onReject func(error)
 
-	if sum, err := JA3(full); err == nil {
-		l.reg.Set(c.RemoteAddr().String(), sum)
-	} else {
-		l.onReject(err)
+	done     atomic.Bool
+	once     sync.Once
+	buf      []byte
+	ja4      string
+	ja3      string
+	parseErr error
+}
+
+// ensure разбирает ClientHello ровно один раз.
+func (c *peekConn) ensure() {
+	c.once.Do(func() {
+		defer c.done.Store(true)
+		_ = c.Conn.SetReadDeadline(time.Now().Add(c.ttl))
+		defer func() { _ = c.Conn.SetReadDeadline(time.Time{}) }()
+
+		head := make([]byte, 5)
+		if _, err := io.ReadFull(c.Conn, head); err != nil {
+			c.parseErr = err
+			c.onReject(err)
+			return
+		}
+		recLen := int(binary.BigEndian.Uint16(head[3:5]))
+		// Запись больше 64 КБ не бывает: защищаемся от мусора в первых байтах.
+		if recLen <= 0 || recLen > 1<<16 {
+			c.parseErr = errBadRecord
+			c.onReject(errBadRecord)
+			return
+		}
+		rest := make([]byte, recLen)
+		if _, err := io.ReadFull(c.Conn, rest); err != nil {
+			c.parseErr = err
+			c.onReject(err)
+			return
+		}
+		c.buf = make([]byte, 0, 5+recLen)
+		c.buf = append(c.buf, head...)
+		c.buf = append(c.buf, rest...)
+
+		h, err := ParseClientHello(c.buf)
+		if err != nil {
+			c.parseErr = err
+			c.onReject(err)
+			return
+		}
+		c.ja4 = h.JA4()
+		c.ja3 = sumMD5(h.String())
+	})
+}
+
+// Read отдаёт сначала прочитанные байты ClientHello, затем читает из соединения.
+func (c *peekConn) Read(p []byte) (int, error) {
+	if !c.done.Load() {
+		c.ensure()
 	}
-	_ = c.SetReadDeadline(time.Time{})
-	return &replayConn{Conn: c, buf: full}, nil
+	if len(c.buf) > 0 {
+		n := copy(p, c.buf)
+		c.buf = c.buf[n:]
+		return n, nil
+	}
+	return c.Conn.Read(p)
+}
+
+// Fingerprint отдаёт отпечатки. К моменту вызова рукопожатие уже прочитало
+// ClientHello, поэтому ensure не блокируется; если вызвать раньше — дождётся.
+func (c *peekConn) Fingerprint() (string, string) {
+	c.ensure()
+	return c.ja4, c.ja3
 }
 
 type errString string
@@ -119,17 +127,5 @@ func (e errString) Error() string { return string(e) }
 
 const errBadRecord = errString("tlsfp: некорректная запись ClientHello")
 
-// replayConn отдаёт сначала прочитанные байты, затем читает из соединения.
-type replayConn struct {
-	net.Conn
-	buf []byte
-}
-
-func (c *replayConn) Read(p []byte) (int, error) {
-	if len(c.buf) > 0 {
-		n := copy(p, c.buf)
-		c.buf = c.buf[n:]
-		return n, nil
-	}
-	return c.Conn.Read(p)
-}
+// ErrParse — ClientHello не разобран; отпечатка нет.
+var ErrParse = errors.New("tlsfp: отпечаток недоступен")

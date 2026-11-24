@@ -3,8 +3,12 @@
 package plugin
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"sync"
+
+	"github.com/quic-go/quic-go"
 )
 
 // Module describes an optional gateway module.
@@ -103,4 +107,91 @@ func HTTPMiddlewares() []HTTPMiddleware {
 		}
 	}
 	return out
+}
+
+// ListenerWrapper — модуль, которому нужен доступ к соединению до TLS.
+// Оборачивает слушатель: реализация обязана быть прозрачной, иначе сломается
+// рукопожатие. Если ни один модуль интерфейс не реализует, слушатель не
+// оборачивается вовсе — горячий путь остаётся нетронутым.
+type ListenerWrapper interface {
+	Module
+	WrapListener(net.Listener) net.Listener
+}
+
+// ConnContextHook — модуль, которому нужны данные соединения в контексте
+// запроса. Вызывается один раз на соединение, не на запрос.
+type ConnContextHook interface {
+	Module
+	ConnContext(ctx context.Context, c net.Conn) context.Context
+}
+
+// ListenerWrappers возвращает модули-обёртки слушателя в порядке регистрации.
+func ListenerWrappers() []ListenerWrapper {
+	var out []ListenerWrapper
+	for _, m := range Modules() {
+		if w, ok := m.(ListenerWrapper); ok {
+			out = append(out, w)
+		}
+	}
+	return out
+}
+
+// ConnContextHooks возвращает хуки контекста соединения в порядке регистрации.
+func ConnContextHooks() []ConnContextHook {
+	var out []ConnContextHook
+	for _, m := range Modules() {
+		if h, ok := m.(ConnContextHook); ok {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
+// WrapListener прогоняет слушатель через все модули, которым он нужен.
+func WrapListener(ln net.Listener) net.Listener {
+	for _, w := range ListenerWrappers() {
+		ln = w.WrapListener(ln)
+	}
+	return ln
+}
+
+// ConnContext прогоняет контекст через все хуки соединения.
+func ConnContext(ctx context.Context, c net.Conn) context.Context {
+	for _, h := range ConnContextHooks() {
+		ctx = h.ConnContext(ctx, c)
+	}
+	return ctx
+}
+
+// PacketConnWrapper — модуль, которому нужны датаграммы до QUIC. Реализация
+// обязана возвращать пакет без изменений, иначе сломается весь HTTP/3.
+type PacketConnWrapper interface {
+	Module
+	WrapPacketConn(net.PacketConn) net.PacketConn
+}
+
+// HTTP3ConnContextHook — модуль, которому нужен контекст QUIC-соединения.
+type HTTP3ConnContextHook interface {
+	Module
+	HTTP3ConnContext(ctx context.Context, c *quic.Conn) context.Context
+}
+
+// WrapPacketConn прогоняет UDP через модули.
+func WrapPacketConn(c net.PacketConn) net.PacketConn {
+	for _, m := range Modules() {
+		if w, ok := m.(PacketConnWrapper); ok {
+			c = w.WrapPacketConn(c)
+		}
+	}
+	return c
+}
+
+// HTTP3ConnContext прогоняет контекст QUIC-соединения через модули.
+func HTTP3ConnContext(ctx context.Context, c *quic.Conn) context.Context {
+	for _, m := range Modules() {
+		if h, ok := m.(HTTP3ConnContextHook); ok {
+			ctx = h.HTTP3ConnContext(ctx, c)
+		}
+	}
+	return ctx
 }

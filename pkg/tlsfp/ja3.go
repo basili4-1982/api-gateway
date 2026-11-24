@@ -9,8 +9,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"strconv"
-	"strings"
 )
 
 // Hello — разобранная часть ClientHello, нужная для отпечатка.
@@ -21,6 +19,10 @@ type Hello struct {
 	Curves     []uint16
 	Formats    []uint8
 	ServerName string
+	// ALPN — протоколы приложения из расширения 16 (h2, http/1.1).
+	ALPN []string
+	// supportedVersion — версия из расширения 43: 0x0304 значит TLS 1.3.
+	supportedVersion uint16
 }
 
 // ErrShortHello — данных меньше, чем нужно для разбора.
@@ -64,6 +66,7 @@ func ParseClientHello(b []byte) (Hello, error) {
 	if len(p) < csLen+1 {
 		return h, ErrShortHello
 	}
+	h.Ciphers = make([]uint16, 0, csLen/2)
 	for i := 0; i+1 < csLen; i += 2 {
 		h.Ciphers = append(h.Ciphers, binary.BigEndian.Uint16(p[i:i+2]))
 	}
@@ -83,6 +86,7 @@ func ParseClientHello(b []byte) (Hello, error) {
 	if len(p) < extLen {
 		return h, ErrShortHello
 	}
+	h.Extensions = make([]uint16, 0, 16)
 	for len(p) >= 4 {
 		typ := binary.BigEndian.Uint16(p[0:2])
 		l := int(binary.BigEndian.Uint16(p[2:4]))
@@ -106,6 +110,30 @@ func ParseClientHello(b []byte) (Hello, error) {
 					h.Curves = append(h.Curves, binary.BigEndian.Uint16(data[i:i+2]))
 				}
 			}
+		case 16: // ALPN
+			if len(data) >= 2 {
+				n := int(binary.BigEndian.Uint16(data[0:2]))
+				p2 := data[2:]
+				for len(p2) >= 1 && n > 0 {
+					l := int(p2[0])
+					if len(p2) < 1+l {
+						break
+					}
+					h.ALPN = append(h.ALPN, string(p2[1:1+l]))
+					p2 = p2[1+l:]
+					n -= 1 + l
+				}
+			}
+		case 43: // supported_versions
+			if len(data) >= 3 {
+				n := int(data[0])
+				for i := 1; i+1 < 1+n && i+1 < len(data); i += 2 {
+					v := binary.BigEndian.Uint16(data[i : i+2])
+					if v > h.supportedVersion {
+						h.supportedVersion = v
+					}
+				}
+			}
 		case 11: // ec_point_formats
 			if len(data) >= 1 {
 				n := int(data[0])
@@ -122,25 +150,25 @@ func ParseClientHello(b []byte) (Hello, error) {
 // String собирает строку JA3 до хеширования. Формат фиксирован: пять полей
 // через запятую, значения через дефис.
 func (h Hello) String() string {
-	ints := func(vals []uint16) string {
-		parts := make([]string, 0, len(vals))
-		for _, v := range vals {
-			parts = append(parts, strconv.Itoa(int(v)))
+	var buf [2048]byte
+	b := buf[:0]
+	b = appendUint(b, int(h.Version))
+	b = append(b, ',')
+	b = appendUintList(b, h.Ciphers, '-')
+	b = append(b, ',')
+	b = appendUintList(b, h.Extensions, '-')
+	b = append(b, ',')
+	b = appendUintList(b, h.Curves, '-')
+	b = append(b, ',')
+	for i, f := range h.Formats {
+		if i > 0 {
+			b = append(b, '-')
 		}
-		return strings.Join(parts, "-")
+		b = appendUint(b, int(f))
 	}
-	bytes := func(vals []uint8) string {
-		parts := make([]string, 0, len(vals))
-		for _, v := range vals {
-			parts = append(parts, strconv.Itoa(int(v)))
-		}
-		return strings.Join(parts, "-")
-	}
-	return strconv.Itoa(int(h.Version)) + "," + ints(h.Ciphers) + "," +
-		ints(h.Extensions) + "," + ints(h.Curves) + "," + bytes(h.Formats)
+	return string(b)
 }
 
-// JA3 возвращает md5-хеш отпечатка.
 func JA3(b []byte) (string, error) {
 	h, err := ParseClientHello(b)
 	if err != nil {
@@ -148,4 +176,10 @@ func JA3(b []byte) (string, error) {
 	}
 	sum := md5.Sum([]byte(h.String()))
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// sumMD5 — хеш JA3.
+func sumMD5(s string) string {
+	sum := md5.Sum([]byte(s))
+	return hex.EncodeToString(sum[:])
 }

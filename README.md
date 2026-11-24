@@ -86,7 +86,7 @@ service discovery по labels Docker/Podman.
 - **Раздача статики / SPA** — с fallback на `index.html` и поддержкой flat-HTML экспорта (Next.js)
 - **Service discovery** — обнаружение бэкендов по labels контейнеров (Docker/Podman), в стиле Traefik
 - **Вебхуки/NATS** — публикация событий `on_request`/`on_response`
-- **Compile-time модули (`xgate`)** — сборка бинарника с выбранными модулями в духе `xcaddy`: DNS-01 провайдеры, auth-коннекторы, discovery, HTTP-middleware; манифест `xgate.yaml`, lock-файл, `xgate list`
+- **Compile-time модули (`xgate`)** — сборка бинарника с выбранными модулями в духе `xcaddy`: DNS-01 провайдеры, auth-коннекторы, discovery, HTTP-middleware, обёртки слушателя и UDP для отпечатков; манифест `xgate.yaml`, lock-файл, `xgate list`
 - **Матчеры маршрутов** — `path_regex` (RE2), совпадение по заголовкам и query-параметрам; комбинируются по И
 - **Политики балансировки и ретраи** — `round_robin`/`random`/`least_conn`/`ip_hash`/`sticky` (cookie `xg_target` с HMAC-подписью); ретраи идемпотентных методов на транспортных ошибках
 - **h2c/gRPC, HTTP/3 и gzip** — cleartext HTTP/2 к бэкендам (`protocol: h2c`), QUIC-листенер для клиентов, сжатие ответов
@@ -101,6 +101,7 @@ service discovery по labels Docker/Podman.
 - [Конфигурация](docs/api-gateway-configuration.md) — полный справочник: все секции и поля, значения по умолчанию, примеры.
 - [Сценарии](docs/api-gateway-scenarios.md) — типовые задачи: авторизация, RBAC, аудит, права, discovery, балансировка.
 - [xgate](docs/xgate.md) — сборка с compile-time модулями; [индекс модулей](docs/modules.md).
+- [fingerprint](docs/fingerprint.md) — модуль отпечатка TLS-клиента: JA4/JA3 в заголовках, TCP и HTTP/3.
 - [Дашборд](docs/api-gateway-dashboard.md) — read-only обзор конфигурации, discovery и метрик.
 
 Онлайн-версия с навигацией: [sarnas.ru/docs/api-gateway](https://sarnas.ru/docs/api-gateway).
@@ -394,6 +395,10 @@ Go-модуле с `replace` на локальный исходник шлюза
 | Auth-коннектор | `plugin.AuthConnector` | `auth.connector: "<name>"` на маршруте |
 | Discovery-провайдер | `plugin.DiscoveryProvider` | `discovery.module: "<name>"` |
 | HTTP middleware | `plugin.HTTPMiddleware` (`Wrap`) | оборачивает HTTP/HTTPS/HTTP/3 листенеры |
+| Обёртка слушателя | `plugin.ListenerWrapper` | читает байты до TLS; без модуля слушатель не оборачивается |
+| Контекст соединения | `plugin.ConnContextHook` | данные рукопожатия для запросов соединения |
+| Обёртка UDP | `plugin.PacketConnWrapper` | читает Initial-пакеты до QUIC |
+| Контекст QUIC | `plugin.HTTP3ConnContextHook` | данные QUIC-соединения для запросов |
 
 Параметры модуля — секция `plugins.<name>` конфига, читаются в
 `Configure(map[string]string)`; неизвестное имя — ошибка запуска. Секции

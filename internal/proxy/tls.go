@@ -17,7 +17,7 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 
 	"code.sarnas.ru/api-gateway/internal/config"
-	"code.sarnas.ru/api-gateway/pkg/tlsfp"
+	"code.sarnas.ru/api-gateway/pkg/plugin"
 )
 
 // letsEncryptStagingDirectory — ACME directory тестового CA Let's Encrypt.
@@ -225,11 +225,16 @@ func (mp *MultiProxy) startTLS() error {
 		if err != nil {
 			return fmt.Errorf("HTTP/3 listen: %w", err)
 		}
+		// Модули могут прочитать Initial-пакет до QUIC; если никто не просит,
+		// соединение уходит как есть.
+		var packetConn net.PacketConn = plugin.WrapPacketConn(conn)
+		h3Server.ConnContext = plugin.HTTP3ConnContext
 		mp.http3Server = h3Server
 		mp.http3Conn = conn
+		_ = packetConn
 		publicHandler = altSvcMiddleware(publicHandler, h3Server)
 		go func() {
-			if err := h3Server.Serve(conn); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := h3Server.Serve(packetConn); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				mp.logger.Error("HTTP/3 server error", zap.Error(err))
 			}
 		}()
@@ -294,23 +299,22 @@ func (mp *MultiProxy) startTLS() error {
 		}
 	}()
 
-	// Слушаем сами, чтобы прочитать ClientHello до TLS: так считается JA3.
-	// Без этого отпечатка шлюз не может отличить браузер от библиотеки.
+	// Слушаем сами: модули могут обернуть слушатель, чтобы прочитать ClientHello
+	// до TLS. Если ни один модуль этого не просит, обёртки нет и горячий путь
+	// остаётся нетронутым.
 	httpsLn, err := net.Listen("tcp", tlsServer.Addr)
 	if err != nil {
 		return fmt.Errorf("HTTPS listen: %w", err)
 	}
-	peek := tlsfp.NewListener(httpsLn, tlsfp.NewRegistry(), func(err error) {
-		mp.logger.Debug("TLS fingerprint skipped", zap.Error(err))
-	})
-	mp.withRegistry(peek.Registry())
+	httpsLn = plugin.WrapListener(httpsLn)
+	tlsServer.ConnContext = plugin.ConnContext
 
 	go func() {
 		mp.logger.Info("Starting HTTPS server",
 			zap.Int("port", tlsCfg.Port),
-			zap.Bool("ja3", true),
+			zap.Int("listener_wrappers", len(plugin.ListenerWrappers())),
 		)
-		if err := tlsServer.Serve(tls.NewListener(peek, serverTLS)); err != nil && err != http.ErrServerClosed {
+		if err := tlsServer.Serve(tls.NewListener(httpsLn, serverTLS)); err != nil && err != http.ErrServerClosed {
 			errCh <- fmt.Errorf("HTTPS server error: %w", err)
 		}
 	}()
