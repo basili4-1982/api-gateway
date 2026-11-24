@@ -395,6 +395,10 @@ Go-модуле с `replace` на локальный исходник шлюза
 | Auth-коннектор | `plugin.AuthConnector` | `auth.connector: "<name>"` на маршруте |
 | Discovery-провайдер | `plugin.DiscoveryProvider` | `discovery.module: "<name>"` |
 | HTTP middleware | `plugin.HTTPMiddleware` (`Wrap`) | оборачивает HTTP/HTTPS/HTTP/3 листенеры |
+| Обёртка слушателя | `plugin.ListenerWrapper` | читает байты до TLS; без модуля слушатель не оборачивается |
+| Контекст соединения | `plugin.ConnContextHook` | данные рукопожатия для запросов соединения |
+| Обёртка UDP | `plugin.PacketConnWrapper` | читает Initial-пакеты до QUIC |
+| Контекст QUIC | `plugin.HTTP3ConnContextHook` | данные QUIC-соединения для запросов |
 
 Параметры модуля — секция `plugins.<name>` конфига, читаются в
 `Configure(map[string]string)`; неизвестное имя — ошибка запуска. Секции
