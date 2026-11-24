@@ -4,75 +4,34 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
-	"sync"
 	"time"
 )
 
-// Registry хранит отпечатки соединений до того, как запрос дойдёт до обработчика.
-// Ключ — адрес соединения (RemoteAddr до NAT), значение — JA3.
-type Registry struct {
-	mu      sync.RWMutex
-	byAddr  map[string]string
-	maxSize int
-}
-
-// NewRegistry создаёт реестр на 100 тысяч соединений: больше на одном узле
-// одновременно не держим, старые вытесняются.
-func NewRegistry() *Registry {
-	return &Registry{byAddr: make(map[string]string, 1024), maxSize: 100_000}
-}
-
-// Set записывает отпечаток.
-func (r *Registry) Set(addr, ja3 string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if len(r.byAddr) >= r.maxSize {
-		// Дешёвое вытеснение: чистим половину. Точность не критична — запрос
-		// приходит сразу после рукопожатия, когда запись ещё свежая.
-		n := 0
-		for k := range r.byAddr {
-			delete(r.byAddr, k)
-			if n++; n >= r.maxSize/2 {
-				break
-			}
-		}
-	}
-	r.byAddr[addr] = ja3
-}
-
-// Get отдаёт отпечаток и удаляет запись: следующий запрос в том же
-// keep-alive соединении уже не требует рукопожатия.
-func (r *Registry) Get(addr string) string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	v := r.byAddr[addr]
-	delete(r.byAddr, addr)
-	return v
+// Fingerprinted — соединение, которое помнит свой отпечаток.
+//
+// Отпечаток считается один раз, при рукопожатии, и живёт на соединении: ни
+// глобальных карт, ни мьютексов на запрос. Обработчик достаёт его из контекста,
+// куда его положил ConnContext сервера.
+type Fingerprinted interface {
+	Fingerprint() (ja4, ja3 string)
 }
 
 // PeekListener читает ClientHello до передачи соединения TLS-серверу.
 type PeekListener struct {
 	net.Listener
-	reg      *Registry
 	readTTL  time.Duration
 	onReject func(error)
 }
 
 // NewListener оборачивает слушатель. onReject может быть nil.
-func NewListener(l net.Listener, reg *Registry, onReject func(error)) *PeekListener {
-	if reg == nil {
-		reg = NewRegistry()
-	}
+func NewListener(l net.Listener, onReject func(error)) *PeekListener {
 	if onReject == nil {
 		onReject = func(error) {}
 	}
-	return &PeekListener{Listener: l, reg: reg, readTTL: 5 * time.Second, onReject: onReject}
+	return &PeekListener{Listener: l, readTTL: 5 * time.Second, onReject: onReject}
 }
 
-// Registry отдаёт реестр, чтобы обработчики могли читать отпечаток.
-func (l *PeekListener) Registry() *Registry { return l.reg }
-
-// Accept читает запись ClientHello, считает отпечаток и возвращает соединение,
+// Accept читает запись ClientHello, считает отпечатки и возвращает соединение,
 // у которого эти байты уже «прочитаны» — TLS-сервер получит их без потерь.
 func (l *PeekListener) Accept() (net.Conn, error) {
 	c, err := l.Listener.Accept()
@@ -104,13 +63,15 @@ func (l *PeekListener) Accept() (net.Conn, error) {
 	full = append(full, head...)
 	full = append(full, rest...)
 
-	if sum, err := JA3(full); err == nil {
-		l.reg.Set(c.RemoteAddr().String(), sum)
+	var ja4, ja3 string
+	if h, err := ParseClientHello(full); err == nil {
+		ja4 = h.JA4()
+		ja3 = sumMD5(h.String())
 	} else {
 		l.onReject(err)
 	}
 	_ = c.SetReadDeadline(time.Time{})
-	return &replayConn{Conn: c, buf: full}, nil
+	return &replayConn{Conn: c, buf: full, ja4: ja4, ja3: ja3}, nil
 }
 
 type errString string
@@ -123,6 +84,8 @@ const errBadRecord = errString("tlsfp: некорректная запись Cli
 type replayConn struct {
 	net.Conn
 	buf []byte
+	ja4 string
+	ja3 string
 }
 
 func (c *replayConn) Read(p []byte) (int, error) {
@@ -133,3 +96,6 @@ func (c *replayConn) Read(p []byte) (int, error) {
 	}
 	return c.Conn.Read(p)
 }
+
+// Fingerprint отдаёт отпечатки, посчитанные при рукопожатии.
+func (c *replayConn) Fingerprint() (string, string) { return c.ja4, c.ja3 }
